@@ -134,18 +134,41 @@ function decodePolyline6(str){
 }
 
 async function requestRoute(locations,plan){
-  const safeLocations=locations.map(l=>({...l,search_filter:{exclude_ferry:true}}));
-  const payload={locations:safeLocations,costing:'motorcycle',units:'kilometers',shape_format:'polyline6',directions_options:{units:'kilometers'},costing_options:{motorcycle:{use_highways:$('motor').checked?0.05:1,use_ferry:0,use_tolls:0.3}}};
-  const res=await fetch(VALHALLA_URL,{method:'POST',headers:{'Content-Type':'application/json','X-Client-Id':'mallorca-riders-routes'},body:JSON.stringify(payload)});
+  // Pedimos a Valhalla una geometría GeoJSON directamente. Así evitamos
+  // cualquier error de decodificación de polilíneas y dibujamos exactamente
+  // la geometría que devuelve el motor de carreteras.
+  const payload={
+    locations,
+    costing:'motorcycle',
+    units:'kilometers',
+    format:'osrm',
+    shape_format:'geojson',
+    directions_type:'none',
+    costing_options:{
+      motorcycle:{
+        use_highways:$('motor').checked?0.05:1,
+        use_ferry:0,
+        exclude_ferries:true,
+        use_tolls:0.3,
+        use_tracks:0.15
+      }
+    }
+  };
+  const res=await fetch(VALHALLA_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   if(!res.ok)throw new Error('HTTP '+res.status);
   const data=await res.json();
-  if(!data.trip||!data.trip.legs?.length)throw new Error('Sin ruta');
-  const coords=[];data.trip.legs.forEach(leg=>coords.push(...decodePolyline6(leg.shape)));
-  if(!coords.length)throw new Error('Sin geometría');
+  if(!data.routes?.length)throw new Error('Sin ruta');
+  const route=data.routes[0];
+  const coords=(route.geometry?.coordinates||[]).map(c=>[c[1],c[0]]);
+  if(coords.length<2)throw new Error('Sin geometría');
+  const summary={distance:Number(route.distance||0),duration:Number(route.duration||0)};
+  // En formato OSRM la respuesta nos permite comprobar de forma inequívoca
+  // si el motor ha usado un ferry. En Mallorca eso debe bloquearse.
+  const hasFerry=route.legs?.some(leg=>leg.steps?.some(step=>String(step.name||'').toLowerCase().includes('ferry')||String(step.maneuver?.type||'').toLowerCase().includes('ferry')))||false;
+  if(hasFerry)throw new Error('ROUTE_HAS_FERRY');
   if(plan.region==='mallorca'&&!routeShapeIsMallorca(coords))throw new Error('ROUTE_LEFT_MALLORCA');
-  return {data,coords};
+  return {data,coords,summary:{lengthKm:summary.distance/1000,timeSec:summary.duration}};
 }
-
 async function generateRoute(){
   const plan=routePlan();if(!plan)return;
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';$('mapStatus').textContent='🧭 Calculando una ruta real, solo por carreteras terrestres…';clearRoute();
@@ -157,13 +180,13 @@ async function generateRoute(){
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
     plan.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ Punto de ruta')));
     map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
-    const km=Math.round(result.data.trip.summary.length),mins=Math.round(result.data.trip.summary.time/60);
+    const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label};
     render(current);$('mapStatus').textContent=`🏍️ Ruta terrestre calculada: ${km} km · ${duration}`;
   }catch(e){
     console.error(e);
-    const msg=e.message==='ROUTE_LEFT_MALLORCA'?'⚠️ El motor intentó sacar la ruta de Mallorca. He bloqueado ese recorrido para que no te mande al continente.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
+    const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_MALLORCA'?'⚠️ El motor intentó sacar la ruta de Mallorca. He bloqueado ese recorrido para que no te mande al continente.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
     $('mapStatus').textContent=msg;alert(msg);
   }finally{btn.disabled=false;btn.textContent='GENERAR RUTA 🏍️'}
 }
