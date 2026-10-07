@@ -14,9 +14,16 @@ function showPosition(p){
   const icon=L.divIcon({className:'',html:'<div class="user-dot"></div>',iconSize:[18,18],iconAnchor:[9,9]});
   userMarker=L.marker(latlng,{icon}).addTo(map).bindPopup('📍 Tu posición');
   userAccuracy=L.circle(latlng,{radius:p.coords.accuracy,color:'#1683ff',weight:1,fillOpacity:.08}).addTo(map);
-  map.setView(latlng,13);
-  $('locStatus').textContent='✅ Ubicación obtenida';
-  $('mapStatus').textContent='📍 Tu posición está marcada en el mapa.';
+  const detected=detectIsland(pos);
+  if(detected){
+    $('region').value=detected;
+    updateRegionUI();
+    $('locStatus').textContent=`✅ Ubicación obtenida · ${ISLANDS[detected].name}`;
+  }else{
+    map.setView(latlng,13);
+    $('locStatus').textContent='✅ Ubicación obtenida';
+    $('mapStatus').textContent='📍 Tu posición está marcada en el mapa.';
+  }
 }
 function locate(){
   if(!navigator.geolocation){$('locStatus').textContent='❌ Geolocalización no disponible';return}
@@ -123,20 +130,6 @@ function distanceKm(a,b){
   return 2*R*Math.asin(Math.sqrt(x));
 }
 
-// Devuelve 1-2 puntos intermedios cercanos a la duración solicitada.
-// Nunca genera coordenadas sobre el mar por geometría circular.
-function mallorcaWaypoints(){
-  const start={lat:pos.latitude,lon:pos.longitude};
-  const pool=MALLORCA_WAYPOINTS[type]||MALLORCA_WAYPOINTS.Mixta;
-  const requested=getRequestedKm();
-  const candidates=pool.map(p=>({...p,d:distanceKm(start,p)}));
-  const targetRadius=Math.max(20,requested*0.28);
-  candidates.sort((a,b)=>Math.abs(a.d-targetRadius)-Math.abs(b.d-targetRadius));
-  const first=candidates[0];
-  const second=candidates.filter(p=>p.name!==first.name).sort((a,b)=>Math.abs(a.d-targetRadius*1.35)-Math.abs(b.d-targetRadius*1.35))[0];
-  return [first,second].filter(Boolean);
-}
-
 function getStartAndTarget(){
   const region=$('region').value;
   if(region==='peninsula'){
@@ -187,7 +180,7 @@ async function requestRoute(locations,plan){
     locations,
     costing:'motorcycle',
     units:'kilometers',
-    format:'osrm',
+    format:'json',
     shape_format:'geojson',
     directions_type:'none',
     costing_options:{
@@ -200,10 +193,22 @@ async function requestRoute(locations,plan){
       }
     }
   };
-  const res=await fetch(VALHALLA_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  if(!res.ok)throw new Error('HTTP '+res.status);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),25000);
+  let res;
+  try{
+    res=await fetch(VALHALLA_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
+  }catch(e){
+    if(e.name==='AbortError') throw new Error('TIMEOUT');
+    throw new Error('NETWORK');
+  }finally{clearTimeout(timer)}
+  if(!res.ok){
+    let detail='';
+    try{detail=(await res.text()).slice(0,180)}catch(_){}
+    throw new Error(`HTTP_${res.status}${detail?'_'+detail.replace(/\s+/g,' ').trim():''}`);
+  }
   const data=await res.json();
-  if(!data.routes?.length)throw new Error('Sin ruta');
+  if(!data.routes?.length)throw new Error('SIN_RUTA');
   const route=data.routes[0];
   const coords=(route.geometry?.coordinates||[]).map(c=>[c[1],c[0]]);
   if(coords.length<2)throw new Error('Sin geometría');
@@ -232,7 +237,7 @@ async function generateRoute(){
     render(current);$('mapStatus').textContent=`🏍️ Ruta terrestre calculada: ${km} km · ${duration}`;
   }catch(e){
     console.error(e);
-    const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_ISLAND'?`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`:'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
+    const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_ISLAND'?`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`:e.message==='TIMEOUT'?'⚠️ El servidor de rutas está tardando demasiado.':e.message==='NETWORK'?'⚠️ No hay conexión con el servidor de rutas.':e.message.startsWith('HTTP_')?'⚠️ El servidor de rutas ha rechazado la petición. Prueba de nuevo en unos segundos.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
     $('mapStatus').textContent=msg;alert(msg);
   }finally{btn.disabled=false;btn.textContent='GENERAR RUTA 🏍️'}
 }
