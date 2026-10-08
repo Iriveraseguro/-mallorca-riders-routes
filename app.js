@@ -47,7 +47,9 @@ $('loc').onclick=locate;
 $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latitude,pos.longitude],14);else locate()};
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
+const APP_VERSION='v5.2';
 const VALHALLA_URL='https://valhalla.openstreetmap.de/route';
+const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
 function destinationPoint(lat,lon,distanceKm,bearingDeg){
   const R=6371, br=bearingDeg*Math.PI/180, d=distanceKm/R;
@@ -210,8 +212,12 @@ function pointInRing(point,ring){
 function pointInGeometry(lat,lon,geometry){
   if(!geometry)return false;
   const pt=[lat,lon];
-  if(geometry.type==='Polygon') return geometry.coordinates[0]&&pointInRing(pt,geometry.coordinates[0]);
-  if(geometry.type==='MultiPolygon') return geometry.coordinates.some(poly=>poly[0]&&pointInRing(pt,poly[0]));
+  const insidePolygon=poly=>{
+    if(!poly?.[0]||!pointInRing(pt,poly[0]))return false;
+    return !(poly.slice(1).some(hole=>pointInRing(pt,hole)));
+  };
+  if(geometry.type==='Polygon') return insidePolygon(geometry.coordinates);
+  if(geometry.type==='MultiPolygon') return geometry.coordinates.some(insidePolygon);
   return false;
 }
 async function loadRegionBoundary(region){
@@ -220,7 +226,7 @@ async function loadRegionBoundary(region){
   const cached=localStorage.getItem('mrr-boundary-'+region);
   if(cached){try{regionGeo[region]=JSON.parse(cached);return regionGeo[region]}catch(_){}}
   const q=encodeURIComponent(REGION_META[region].query);
-  const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=1&q=${q}`;
+  const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=1&featuretype=island&q=${q}`;
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
   try{
     const res=await fetch(url,{headers:{Accept:'application/json'},signal:controller.signal});
@@ -245,22 +251,18 @@ function routeShapeIsInRegion(coords,region,geometry){
 }
 
 function poiQueryForStop(stop){
-  if(stop.includes('Restaurante'))return 'node["amenity"="restaurant"];way["amenity"="restaurant"];';
-  if(stop.includes('Café'))return 'node["amenity"="cafe"];way["amenity"="cafe"];';
-  if(stop.includes('Bar'))return 'node["amenity"="bar"];way["amenity"="bar"];';
-  if(stop.includes('Gasolinera'))return 'node["amenity"="fuel"];way["amenity"="fuel"];';
-  if(stop.includes('Mirador'))return 'node["tourism"="viewpoint"];way["tourism"="viewpoint"];';
-  return '';
+  if(stop.includes('Restaurante'))return ['node["amenity"="restaurant"]','way["amenity"="restaurant"]'];
+  if(stop.includes('Café'))return ['node["amenity"="cafe"]','way["amenity"="cafe"]'];
+  if(stop.includes('Bar'))return ['node["amenity"="bar"]','way["amenity"="bar"]'];
+  if(stop.includes('Gasolinera'))return ['node["amenity"="fuel"]','way["amenity"="fuel"]'];
+  if(stop.includes('Mirador'))return ['node["tourism"="viewpoint"]','way["tourism"="viewpoint"]'];
+  return [];
 }
-function routeBounds(coords){
-  let minLat=90,maxLat=-90,minLon=180,maxLon=-180;
-  coords.forEach(([lat,lon])=>{minLat=Math.min(minLat,lat);maxLat=Math.max(maxLat,lat);minLon=Math.min(minLon,lon);maxLon=Math.max(maxLon,lon)});
-  const pad=.015; return [minLat-pad,minLon-pad,maxLat+pad,maxLon+pad];
-}
+
 async function findRealStop(coords,stop){
-  const selector=poiQueryForStop(stop); if(!selector)return null;
+  const selector=poiQueryForStop(stop); if(!selector.length)return null;
   const [s,w,n,e]=routeBounds(coords);
-  const query=`[out:json][timeout:12];(${selector}(${s},${w},${n},${e}););out center tags;`;
+  const query=`[out:json][timeout:12];(${selector.map(q=>`${q}(${s},${w},${n},${e});`).join('')});out center tags;`;
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
   try{
     const res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:query,signal:controller.signal});
@@ -290,12 +292,12 @@ async function requestRoute(locations,plan){
     locations,
     costing:'motorcycle',
     units:'kilometers',
-    format:'json',
+    format:'osrm',
     shape_format:'geojson',
     directions_type:'none',
-    exclude_ferries:true,
     costing_options:{
       motorcycle:{
+        exclude_ferries:true,
         use_highways:$('motor').checked?0.05:1,
         use_ferry:0,
         use_tolls:0.3,
@@ -307,7 +309,7 @@ async function requestRoute(locations,plan){
   const timer=setTimeout(()=>controller.abort(),25000);
   let res;
   try{
-    res=await fetch(VALHALLA_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
+    res=await fetch(VALHALLA_URL,{method:'POST',headers:VALHALLA_HEADERS,body:JSON.stringify(payload),signal:controller.signal});
   }catch(e){
     if(e.name==='AbortError') throw new Error('TIMEOUT');
     throw new Error('NETWORK');
@@ -318,14 +320,14 @@ async function requestRoute(locations,plan){
     throw new Error(`HTTP_${res.status}${detail?'_'+detail.replace(/\s+/g,' ').trim():''}`);
   }
   const data=await res.json();
-  if(!data.routes?.length)throw new Error('SIN_RUTA');
+  if(!data.routes?.length)throw new Error(data.message||'SIN_RUTA');
   const route=data.routes[0];
-  const coords=(route.geometry?.coordinates||[]).map(c=>[c[1],c[0]]);
+  const geometry=route.geometry;
+  const coords=Array.isArray(geometry?.coordinates)?geometry.coordinates.map(c=>[Number(c[1]),Number(c[0])]).filter(c=>Number.isFinite(c[0])&&Number.isFinite(c[1])):[];
   if(coords.length<2)throw new Error('Sin geometría');
-  const summary={distance:Number(route.distance||0),duration:Number(route.duration||0)};
-  // En formato OSRM la respuesta nos permite comprobar de forma inequívoca
-  // si el motor ha usado un ferry. En Mallorca eso debe bloquearse.
-  const hasFerry=route.legs?.some(leg=>leg.steps?.some(step=>String(step.name||'').toLowerCase().includes('ferry')||String(step.maneuver?.type||'').toLowerCase().includes('ferry')))||false;
+  const summary={distance:Number(route.distance||0)/1000,duration:Number(route.duration||0)};
+  // OSRM devuelve pasos/maneuvers; bloqueamos cualquier indicio de ferry aunque el servidor lo haya permitido.
+  const hasFerry=route.legs?.some(leg=>leg.steps?.some(step=>String(step.mode||'').toLowerCase()==='ferry'||String(step.name||'').toLowerCase().includes('ferry')||String(step.maneuver?.type||'').toLowerCase().includes('ferry')))||false;
   if(hasFerry)throw new Error('ROUTE_HAS_FERRY');
   const boundary=ISLANDS[plan.region]?await loadRegionBoundary(plan.region):null;
   if(ISLANDS[plan.region] && !boundary) throw new Error('ISLAND_BOUNDARY_UNAVAILABLE');
@@ -336,9 +338,10 @@ async function generateRoute(){
   const plan=routePlan();if(!plan)return;
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';$('mapStatus').textContent='🧭 Calculando una ruta real, solo por carreteras terrestres…';clearRoute();
   try{
-    let locations=[{lat:plan.start.lat,lon:plan.start.lon,type:'break'}];
-    plan.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break'}));
-    if($('circle').checked)locations.push({lat:plan.start.lat,lon:plan.start.lon,type:'break'});
+    const noFerryFilter=ISLANDS[plan.region]?{exclude_ferry:true}:{};
+    let locations=[{lat:plan.start.lat,lon:plan.start.lon,type:'break',search_filter:noFerryFilter}];
+    plan.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:noFerryFilter}));
+    if($('circle').checked)locations.push({lat:plan.start.lat,lon:plan.start.lon,type:'break',search_filter:noFerryFilter});
     const result=await requestRoute(locations,plan);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
     plan.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
