@@ -2,13 +2,26 @@ let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=nul
 const $=x=>document.getElementById(x);
 
 function initMap(){
-  map=L.map('map',{zoomControl:true}).setView([39.62,2.95],10);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+  if(map) return map;
+  const el=$('map');
+  if(!el){ console.error('Mapa: no existe #map'); return null; }
+  if(typeof L==='undefined'){ console.error('Mapa: Leaflet no ha cargado'); return null; }
+  try{
+    map=L.map(el,{zoomControl:true,preferCanvas:true}).setView([39.62,2.95],10);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+    setTimeout(()=>map&&map.invalidateSize(),50);
+    return map;
+  }catch(err){
+    console.error('Mapa: error al inicializar',err);
+    map=null;
+    return null;
+  }
 }
 
 function showPosition(p){
   pos=p.coords;
   const latlng=[p.coords.latitude,p.coords.longitude];
+  if(!initMap()) { $('locStatus').textContent='❌ El mapa todavía no está listo'; return; }
   if(userMarker) map.removeLayer(userMarker);
   if(userAccuracy) map.removeLayer(userAccuracy);
   const icon=L.divIcon({className:'',html:'<div class="user-dot"></div>',iconSize:[18,18],iconAnchor:[9,9]});
@@ -31,7 +44,7 @@ function locate(){
   navigator.geolocation.getCurrentPosition(showPosition,()=>{$('locStatus').textContent='❌ No se pudo obtener la ubicación';$('mapStatus').textContent='Permite la ubicación en el navegador para situarte.'},{enableHighAccuracy:true,timeout:10000,maximumAge:30000});
 }
 $('loc').onclick=locate;
-$('centerMap').onclick=()=>{if(pos)map.setView([pos.latitude,pos.longitude],14);else locate()};
+$('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latitude,pos.longitude],14);else locate()};
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
 const VALHALLA_URL='https://valhalla.openstreetmap.de/route';
@@ -43,7 +56,7 @@ function destinationPoint(lat,lon,distanceKm,bearingDeg){
   const l2=l1+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
   return {lat:p2*180/Math.PI,lon:((l2*180/Math.PI+540)%360)-180};
 }
-function clearRoute(){if(routeLine){map.removeLayer(routeLine);routeLine=null}routeMarkers.forEach(m=>map.removeLayer(m));routeMarkers=[]}
+function clearRoute(){if(!map) return; if(routeLine){map.removeLayer(routeLine);routeLine=null}routeMarkers.forEach(m=>map.removeLayer(m));routeMarkers=[]}
 
 const PENINSULA={
   barcelona:{name:'Barcelona',lat:41.3874,lon:2.1686,targets:{Mixta:[41.73,2.25],Curvas:[41.65,2.45],Costa:[41.96,3.20],Montaña:[42.15,2.52]}},
@@ -107,10 +120,6 @@ function detectIsland(coords){
   for(const [key,island] of Object.entries(ISLANDS)) if(pointInBox(lat,lon,island.box)) return key;
   return null;
 }
-function routeShapeIsInRegion(coords,region){
-  const island=ISLANDS[region];
-  return !!island && coords.length>4 && coords.every(p=>pointInBox(p[0],p[1],island.box));
-}
 
 function getRequestedKm(){return parseInt(($('km').value.match(/\d+/)||['120'])[0],10)}
 
@@ -145,6 +154,8 @@ function getStartAndTarget(){
 }
 function updateRegionUI(){
   const region=$('region').value;
+  if(!map) initMap();
+  if(!map) return;
   const pen=region==='peninsula';
   $('peninsulaStart').disabled=!pen;
   const island=ISLANDS[region];
@@ -159,7 +170,13 @@ function updateRegionUI(){
     $('mapStatus').textContent=`${region==='mallorca'?'🏝️':'🏝️'} Ruta solo por ${island.name}.`;
   }
 }
-$('region').onchange=updateRegionUI;$('peninsulaStart').onchange=updateRegionUI;updateRegionUI();
+function initApp(){
+  if(!initMap()){ $('mapStatus').textContent='⚠️ No se pudo cargar el mapa. Recarga la página.'; return; }
+  $('region').onchange=updateRegionUI;
+  $('peninsulaStart').onchange=updateRegionUI;
+  updateRegionUI();
+}
+window.addEventListener('load',initApp,{once:true});
 
 function routePlan(){
   const region=$('region').value;
@@ -170,6 +187,99 @@ function routePlan(){
 function decodePolyline6(str){
   let index=0,lat=0,lon=0,out=[];
   while(index<str.length){let result=0,shift=0,b;do{b=str.charCodeAt(index++)-63;result|=(b&31)<<shift;shift+=5}while(b>=32);const dlat=(result&1)?~(result>>1):(result>>1);lat+=dlat;result=0;shift=0;do{b=str.charCodeAt(index++)-63;result|=(b&31)<<shift;shift+=5}while(b>=32);const dlon=(result&1)?~(result>>1):(result>>1);lon+=dlon;out.push([lat/1e6,lon/1e6])}return out;
+}
+
+
+const REGION_META={
+  mallorca:{query:'Mallorca, Illes Balears, Spain'},
+  menorca:{query:'Menorca, Illes Balears, Spain'},
+  ibiza:{query:'Ibiza, Illes Balears, Spain'},
+  formentera:{query:'Formentera, Illes Balears, Spain'}
+};
+const regionGeo={};
+
+function pointInRing(point,ring){
+  const x=point[1],y=point[0]; let inside=false;
+  for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+    const xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];
+    const hit=((yi>y)!==(yj>y))&&(x<((xj-xi)*(y-yi))/(yj-yi)+xi);
+    if(hit)inside=!inside;
+  }
+  return inside;
+}
+function pointInGeometry(lat,lon,geometry){
+  if(!geometry)return false;
+  const pt=[lat,lon];
+  if(geometry.type==='Polygon') return geometry.coordinates[0]&&pointInRing(pt,geometry.coordinates[0]);
+  if(geometry.type==='MultiPolygon') return geometry.coordinates.some(poly=>poly[0]&&pointInRing(pt,poly[0]));
+  return false;
+}
+async function loadRegionBoundary(region){
+  if(!REGION_META[region])return null;
+  if(regionGeo[region])return regionGeo[region];
+  const cached=localStorage.getItem('mrr-boundary-'+region);
+  if(cached){try{regionGeo[region]=JSON.parse(cached);return regionGeo[region]}catch(_){}}
+  const q=encodeURIComponent(REGION_META[region].query);
+  const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=1&q=${q}`;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+  try{
+    const res=await fetch(url,{headers:{Accept:'application/json'},signal:controller.signal});
+    if(!res.ok)throw new Error('boundary http');
+    const data=await res.json();
+    const geo=data[0]?.geojson;
+    if(!geo)throw new Error('boundary missing');
+    regionGeo[region]=geo;
+    try{localStorage.setItem('mrr-boundary-'+region,JSON.stringify(geo))}catch(_){ }
+    return geo;
+  }catch(e){console.warn('No se pudo cargar el contorno OSM de',region,e);return null}
+  finally{clearTimeout(timer)}
+}
+function routeShapeIsInRegion(coords,region,geometry){
+  const island=ISLANDS[region];
+  if(!island||coords.length<5)return false;
+  // Si disponemos del contorno real de OSM, TODOS los puntos deben estar dentro.
+  if(geometry) return coords.every(p=>pointInGeometry(p[0],p[1],geometry));
+  // Si no podemos obtener el contorno real, no aceptamos la ruta: la seguridad
+  // de una isla no debe depender de una caja aproximada.
+  return false;
+}
+
+function poiQueryForStop(stop){
+  if(stop.includes('Restaurante'))return 'node["amenity"="restaurant"];way["amenity"="restaurant"];';
+  if(stop.includes('Café'))return 'node["amenity"="cafe"];way["amenity"="cafe"];';
+  if(stop.includes('Bar'))return 'node["amenity"="bar"];way["amenity"="bar"];';
+  if(stop.includes('Gasolinera'))return 'node["amenity"="fuel"];way["amenity"="fuel"];';
+  if(stop.includes('Mirador'))return 'node["tourism"="viewpoint"];way["tourism"="viewpoint"];';
+  return '';
+}
+function routeBounds(coords){
+  let minLat=90,maxLat=-90,minLon=180,maxLon=-180;
+  coords.forEach(([lat,lon])=>{minLat=Math.min(minLat,lat);maxLat=Math.max(maxLat,lat);minLon=Math.min(minLon,lon);maxLon=Math.max(maxLon,lon)});
+  const pad=.015; return [minLat-pad,minLon-pad,maxLat+pad,maxLon+pad];
+}
+async function findRealStop(coords,stop){
+  const selector=poiQueryForStop(stop); if(!selector)return null;
+  const [s,w,n,e]=routeBounds(coords);
+  const query=`[out:json][timeout:12];(${selector}(${s},${w},${n},${e}););out center tags;`;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+  try{
+    const res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:query,signal:controller.signal});
+    if(!res.ok)throw new Error('overpass http');
+    const data=await res.json();
+    const candidates=(data.elements||[]).map(el=>({
+      lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,
+      name:el.tags?.name||stop.replace(/^\S+\s*/,''),tags:el.tags||{}
+    })).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon)&&x.name);
+    if(!candidates.length)return null;
+    let best=null,bestScore=Infinity;
+    for(const c of candidates){
+      let nearest=Infinity;
+      for(let i=0;i<coords.length;i+=Math.max(1,Math.floor(coords.length/80)))nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));
+      if(nearest<bestScore){bestScore=nearest;best=c}
+    }
+    return bestScore<=3?{...best,distanceKm:bestScore}:null;
+  }catch(e){console.warn('No se pudo consultar paradas OSM',e);return null}
+  finally{clearTimeout(timer)}
 }
 
 async function requestRoute(locations,plan){
@@ -183,11 +293,11 @@ async function requestRoute(locations,plan){
     format:'json',
     shape_format:'geojson',
     directions_type:'none',
+    exclude_ferries:true,
     costing_options:{
       motorcycle:{
         use_highways:$('motor').checked?0.05:1,
         use_ferry:0,
-        exclude_ferries:true,
         use_tolls:0.3,
         use_tracks:0.15
       }
@@ -217,8 +327,10 @@ async function requestRoute(locations,plan){
   // si el motor ha usado un ferry. En Mallorca eso debe bloquearse.
   const hasFerry=route.legs?.some(leg=>leg.steps?.some(step=>String(step.name||'').toLowerCase().includes('ferry')||String(step.maneuver?.type||'').toLowerCase().includes('ferry')))||false;
   if(hasFerry)throw new Error('ROUTE_HAS_FERRY');
-  if(ISLANDS[plan.region]&&!routeShapeIsInRegion(coords,plan.region))throw new Error('ROUTE_LEFT_ISLAND');
-  return {data,coords,summary:{lengthKm:summary.distance/1000,timeSec:summary.duration}};
+  const boundary=ISLANDS[plan.region]?await loadRegionBoundary(plan.region):null;
+  if(ISLANDS[plan.region] && !boundary) throw new Error('ISLAND_BOUNDARY_UNAVAILABLE');
+  if(ISLANDS[plan.region]&&!routeShapeIsInRegion(coords,plan.region,boundary))throw new Error('ROUTE_LEFT_ISLAND');
+  return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration}};
 }
 async function generateRoute(){
   const plan=routePlan();if(!plan)return;
@@ -229,25 +341,33 @@ async function generateRoute(){
     if($('circle').checked)locations.push({lat:plan.start.lat,lon:plan.start.lon,type:'break'});
     const result=await requestRoute(locations,plan);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
-    plan.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ Punto de ruta')));
+    plan.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
+    let realStop=null;
+    if($('stop').value!=='none'){
+      $('mapStatus').textContent='📍 Buscando una parada real cerca de la ruta…';
+      realStop=await findRealStop(result.coords,$('stop').value);
+      if(realStop){
+        routeMarkers.push(L.marker([realStop.lat,realStop.lon]).addTo(map).bindPopup(`<b>${realStop.name}</b><br>${$('stop').value}`));
+      }
+    }
     map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label};
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label};
     render(current);$('mapStatus').textContent=`🏍️ Ruta terrestre calculada: ${km} km · ${duration}`;
   }catch(e){
     console.error(e);
-    const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_ISLAND'?`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`:e.message==='TIMEOUT'?'⚠️ El servidor de rutas está tardando demasiado.':e.message==='NETWORK'?'⚠️ No hay conexión con el servidor de rutas.':e.message.startsWith('HTTP_')?'⚠️ El servidor de rutas ha rechazado la petición. Prueba de nuevo en unos segundos.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
+    const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_ISLAND'?`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`:e.message==='ISLAND_BOUNDARY_UNAVAILABLE'?'⚠️ No he podido verificar el contorno real de la isla. No voy a mostrar una ruta sin esa comprobación.':e.message==='TIMEOUT'?'⚠️ El servidor de rutas está tardando demasiado.':e.message==='NETWORK'?'⚠️ No hay conexión con el servidor de rutas.':e.message.startsWith('HTTP_')?'⚠️ El servidor de rutas ha rechazado la petición. Prueba de nuevo en unos segundos.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
     $('mapStatus').textContent=msg;alert(msg);
   }finally{btn.disabled=false;btn.textContent='GENERAR RUTA 🏍️'}
 }
 $('generate').onclick=generateRoute;
 
-function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':r.stop}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
+function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.realStop?`📍 ${r.stop} · <b>${r.realStop.name}</b>`:`${r.stop} · No se encontró una parada cercana`)}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 function save(){let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list()}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${r.name}</b><br><small>${r.km} · ${r.duration} · ${r.type||type}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
 function repeat(i){current=get()[i];render(current)}
 async function share(){let t=`🏍️ ${current.name}\n${current.km} · ${current.duration}\nMallorca Riders Routes`;if(navigator.share)await navigator.share({title:current.name,text:t});else if(navigator.clipboard)await navigator.clipboard.writeText(t)}
 function maps(){window.open(pos?`https://www.google.com/maps/dir/?api=1&origin=${pos.latitude},${pos.longitude}&destination=${pos.latitude},${pos.longitude}&travelmode=driving`:'https://www.google.com/maps','_blank')}
-initMap();list();
+list();
