@@ -48,7 +48,7 @@ $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latit
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
 const APP_VERSION='v5.2';
-const VALHALLA_URL='https://misty-disk-3dfe.i-riveraseguro.workers.dev;
+const VALHALLA_URL='https://misty-disk-3dfe.i-riveraseguro.workers.dev';
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
 function destinationPoint(lat,lon,distanceKm,bearingDeg){
