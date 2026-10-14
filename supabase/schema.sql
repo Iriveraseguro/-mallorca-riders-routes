@@ -14,6 +14,8 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+create unique index if not exists profiles_nickname_case_insensitive_idx on public.profiles (lower(nickname));
+
 create table if not exists public.shared_routes (
   id uuid primary key default gen_random_uuid(),
   creator_id uuid not null references public.profiles(id) on delete cascade,
