@@ -245,8 +245,16 @@ window.addEventListener('load',initApp,{once:true});
 
 function routePlan(){
   const region=$('region').value;
-  let st=getStartAndTarget();if(!st)return null;
-  if(manualRouteActive){if(manualWaypoints.length<2)return null;st={start:{lat:manualWaypoints[0].lat,lon:manualWaypoints[0].lon},targets:manualWaypoints.slice(1).map((p,i)=>({...p,name:'Punto '+(i+2)})),label:'ruta con puntos manuales'};}
+  // En modo manual, los puntos dibujados por el usuario son el origen y
+  // los destinos; no dependemos de que exista una salida automática elegida.
+  let st;
+  if(manualRouteActive){
+    if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Coloca al menos 2 puntos y pulsa «Terminar puntos».';return null;}
+    st={start:{lat:manualWaypoints[0].lat,lon:manualWaypoints[0].lon},targets:manualWaypoints.slice(1).map((p,i)=>({...p,name:'Punto '+(i+2)})),label:'ruta con puntos manuales'};
+  }else{
+    st=getStartAndTarget();
+    if(!st)return null;
+  }
   const durationHours=parseFloat($('duration').value||'3')||3;
   return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),requestedMinutes:durationHours*60,curves:Number($('curves').value)||3,type,label:st.label,region,manual:manualRouteActive};
 }
@@ -498,7 +506,14 @@ async function generateRoute(){
     const {result,candidate:chosen}=valid[0];
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
-    chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
+    if(plan.manual){
+      manualWaypoints.forEach((p,index)=>{
+        const marker=L.marker([p.lat,p.lon],{icon:L.divIcon({className:'manual-point-icon',html:'<div class="manual-point">'+(index+1)+'</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map).bindPopup('🏍️ Punto '+(index+1)+' · La ruta debe pasar por este punto');
+        routeMarkers.push(marker);
+      });
+    }else{
+      chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
+    }
     let realStop=null,realStops=[],poiError=null;
     if($('stop').value!=='none'){
       $('mapStatus').textContent='📍 Buscando establecimientos reales cerca de la ruta…';
