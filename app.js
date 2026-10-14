@@ -1,4 +1,4 @@
-let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[];
+let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -9,6 +9,7 @@ function initMap(){
   try{
     map=L.map(el,{zoomControl:true,preferCanvas:true}).setView([39.62,2.95],10);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+    map.on('click',e=>{if(manualMode)addManualWaypoint(e.latlng);});
     setTimeout(()=>map&&map.invalidateSize(),50);
     return map;
   }catch(err){
@@ -59,6 +60,19 @@ function destinationPoint(lat,lon,distanceKm,bearingDeg){
   return {lat:p2*180/Math.PI,lon:((l2*180/Math.PI+540)%360)-180};
 }
 function clearRoute(){if(!map) return; if(routeLine){map.removeLayer(routeLine);routeLine=null}routeMarkers.forEach(m=>map.removeLayer(m));routeMarkers=[]}
+function addManualWaypoint(latlng){
+  const region=$('region').value,island=ISLANDS[region];
+  if(island&&!pointInBox(latlng.lat,latlng.lng,island.box)){$('mapStatus').textContent='⚠️ Coloca los puntos dentro de la isla seleccionada.';return}
+  const n=manualWaypoints.length+1;manualWaypoints.push({name:'Punto '+n,lat:latlng.lat,lon:latlng.lng});
+  const icon=L.divIcon({className:'manual-point-icon',html:'<div class="manual-point">'+n+'</div>',iconSize:[30,30],iconAnchor:[15,15]});
+  const marker=L.marker([latlng.lat,latlng.lng],{icon,draggable:true}).addTo(map);
+  marker.on('dragend',()=>{const p=marker.getLatLng();manualWaypoints[n-1].lat=p.lat;manualWaypoints[n-1].lon=p.lng});
+  marker.bindPopup('<b>Punto '+n+'</b><br>Punto de paso de tu ruta');manualMarkers.push(marker);manualRouteActive=false;
+  $('mapStatus').textContent='📍 '+n+' punto(s) colocados. Añade al menos 2 y pulsa «Terminar puntos».';
+}
+function startManualRoute(){manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
+function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
+function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Puntos borrados.'}
 
 const PENINSULA={
   barcelona:{name:'Barcelona',lat:41.3874,lon:2.1686,targets:{Mixta:[41.73,2.25],Curvas:[41.65,2.45],Costa:[41.96,3.20],Montaña:[42.15,2.52]}},
@@ -174,7 +188,10 @@ function updateRegionUI(){
 }
 function initApp(){
   if(!initMap()){ $('mapStatus').textContent='⚠️ No se pudo cargar el mapa. Recarga la página.'; return; }
-  $('region').onchange=updateRegionUI;
+  $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
+  $('finishManual').onclick=finishManualRoute;
+  $('clearManual').onclick=clearManualRoute;
+  $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
   updateRegionUI();
 }
@@ -182,9 +199,10 @@ window.addEventListener('load',initApp,{once:true});
 
 function routePlan(){
   const region=$('region').value;
-  const st=getStartAndTarget();if(!st)return null;
+  let st=getStartAndTarget();if(!st)return null;
+  if(manualRouteActive){if(manualWaypoints.length<2)return null;st={start:{lat:manualWaypoints[0].lat,lon:manualWaypoints[0].lon},targets:manualWaypoints.slice(1).map((p,i)=>({...p,name:'Punto '+(i+2)})),label:'ruta con puntos manuales'};}
   const durationHours=parseFloat($('duration').value||'3')||3;
-  return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),requestedMinutes:durationHours*60,curves:Number($('curves').value)||3,type,label:st.label,region};
+  return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),requestedMinutes:durationHours*60,curves:Number($('curves').value)||3,type,label:st.label,region,manual:manualRouteActive};
 }
 function buildRouteCandidates(plan){
   const candidates=[];
@@ -412,7 +430,7 @@ async function generateRoute(){
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';
   $('mapStatus').textContent='🧭 Comparando alternativas para acercarnos a los km y duración elegidos…';clearRoute();
   try{
-    const alternatives=buildRouteCandidates(plan);
+    const alternatives=plan.manual?[plan]:buildRouteCandidates(plan);
     const settled=await Promise.allSettled(alternatives.map(async candidate=>{
       const filter=ISLANDS[candidate.region]?{exclude_ferry:true}:{};
       const locations=[{lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter}];
