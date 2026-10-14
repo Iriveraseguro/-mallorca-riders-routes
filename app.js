@@ -406,8 +406,16 @@ async function generateRoute(){
     render(current);
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}`;
   }catch(e){
-    console.error(e);
-    const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_ISLAND'?`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`:e.message==='ISLAND_BOUNDARY_UNAVAILABLE'?'⚠️ No he podido verificar el contorno real de la isla. No voy a mostrar una ruta sin esa comprobación.':e.message==='TIMEOUT'?'⚠️ El servidor de rutas está tardando demasiado.':e.message==='NETWORK'?'⚠️ No hay conexión con el servidor de rutas.':e.message.startsWith('HTTP_')?'⚠️ El servidor de rutas ha rechazado la petición. Prueba de nuevo en unos segundos.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
+    console.error('Error al generar ruta:',e);
+    const reason=String(e?.message||e||'ERROR_DESCONOCIDO');
+    let msg;
+    if(reason==='ROUTE_HAS_FERRY')msg='⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.';
+    else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
+    else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
+    else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
+    else if(reason==='NETWORK')msg='⚠️ No hay conexión con el servidor de rutas.';
+    else if(reason.startsWith('HTTP_'))msg=`⚠️ El servidor de rutas ha rechazado la petición (${reason.slice(0,100)}).`;
+    else msg=`⚠️ Fallo al generar la ruta: ${reason.slice(0,180)}`;
     $('mapStatus').textContent=msg;alert(msg);
   }finally{btn.disabled=false;btn.textContent='GENERAR RUTA 🏍️'}
 }
