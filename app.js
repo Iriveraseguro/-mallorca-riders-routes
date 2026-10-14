@@ -66,11 +66,13 @@ function refreshManualPointLabels(){
     const marker=manualMarkers.find(m=>m._manualPointId===point.id);
     if(marker){
       marker.setIcon(L.divIcon({className:'manual-point-icon',html:'<div class="manual-point">'+(index+1)+'</div>',iconSize:[30,30],iconAnchor:[15,15]}));
-      marker.setPopupContent('<b>Punto '+(index+1)+'</b><br>Punto de paso de tu ruta<br><button type="button" class="delete-manual-point" onclick="removeManualWaypoint('+point.id+')">🗑️ Borrar solo este punto</button>');
+      const popupHtml='<b>Punto '+(index+1)+'</b><br>Punto de paso de tu ruta<br><button type="button" class="delete-manual-point" onclick="window.removeManualWaypoint('+point.id+')">🗑️ Borrar solo este punto</button>';
+      if(marker.getPopup()) marker.setPopupContent(popupHtml);
+      else marker.bindPopup(popupHtml);
     }
   });
 }
-function removeManualWaypoint(id){
+window.removeManualWaypoint = function(id){
   const index=manualWaypoints.findIndex(p=>p.id===id);
   if(index<0)return;
   manualWaypoints.splice(index,1);
@@ -79,7 +81,7 @@ function removeManualWaypoint(id){
   refreshManualPointLabels();
   manualRouteActive=false;
   $('mapStatus').textContent='🗑️ Punto eliminado. Quedan '+manualWaypoints.length+'. Puedes añadir otro o terminar los puntos.';
-}
+};
 function addManualWaypoint(latlng){
   const region=$('region').value,island=ISLANDS[region];
   if(island&&!pointInBox(latlng.lat,latlng.lng,island.box)){$('mapStatus').textContent='⚠️ Coloca los puntos dentro de la isla seleccionada.';return}
