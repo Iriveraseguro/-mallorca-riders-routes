@@ -225,6 +225,8 @@ const REGION_META={
   formentera:{query:'Formentera, Illes Balears, Spain'}
 };
 const regionGeo={};
+// Compartimos una única petición de contorno entre las rutas alternativas concurrentes.
+const regionBoundaryPromises={};
 
 function pointInRing(point,ring){
   const x=point[1],y=point[0]; let inside=false;
@@ -249,22 +251,31 @@ function pointInGeometry(lat,lon,geometry){
 async function loadRegionBoundary(region){
   if(!REGION_META[region])return null;
   if(regionGeo[region])return regionGeo[region];
-  const cached=localStorage.getItem('mrr-boundary-'+region);
-  if(cached){try{regionGeo[region]=JSON.parse(cached);return regionGeo[region]}catch(_){}}
-  const q=encodeURIComponent(REGION_META[region].query);
-  const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=1&featuretype=island&q=${q}`;
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
-  try{
-    const res=await fetch(url,{headers:{Accept:'application/json'},signal:controller.signal});
-    if(!res.ok)throw new Error('boundary http');
-    const data=await res.json();
-    const geo=data[0]?.geojson;
-    if(!geo)throw new Error('boundary missing');
-    regionGeo[region]=geo;
-    try{localStorage.setItem('mrr-boundary-'+region,JSON.stringify(geo))}catch(_){ }
-    return geo;
-  }catch(e){console.warn('No se pudo cargar el contorno OSM de',region,e);return null}
-  finally{clearTimeout(timer)}
+  if(regionBoundaryPromises[region])return regionBoundaryPromises[region];
+  regionBoundaryPromises[region]=(async()=>{
+    const cached=localStorage.getItem('mrr-boundary-'+region);
+    if(cached){try{regionGeo[region]=JSON.parse(cached);return regionGeo[region]}catch(_){}}
+    const q=encodeURIComponent(REGION_META[region].query);
+    const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=1&featuretype=island&q=${q}`;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+    try{
+      const res=await fetch(url,{headers:{Accept:'application/json'},signal:controller.signal});
+      if(!res.ok)throw new Error('boundary http '+res.status);
+      const data=await res.json();
+      const geo=data[0]?.geojson;
+      if(!geo)throw new Error('boundary missing');
+      regionGeo[region]=geo;
+      try{localStorage.setItem('mrr-boundary-'+region,JSON.stringify(geo))}catch(_){}
+      return geo;
+    }catch(e){
+      console.warn('No se pudo cargar el contorno OSM de',region,e);
+      return null;
+    }finally{
+      clearTimeout(timer);
+      delete regionBoundaryPromises[region];
+    }
+  })();
+  return regionBoundaryPromises[region];
 }
 function routeShapeIsInRegion(coords,region,geometry){
   const island=ISLANDS[region];
