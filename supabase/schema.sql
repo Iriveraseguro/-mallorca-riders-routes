@@ -128,8 +128,13 @@ begin
     requested_nickname := 'Rider_' || substr(replace(new.id::text, '-', ''), 1, 8);
   end if;
 
-  insert into public.profiles (id, nickname)
-  values (new.id, requested_nickname)
+  -- If the chosen nickname is already taken, create a unique temporary one.
+  if exists (select 1 from public.profiles p where lower(p.nickname) = lower(requested_nickname)) then
+    requested_nickname := 'Rider_' || substr(replace(new.id::text, '-', ''), 1, 12);
+  end if;
+
+  insert into public.profiles (id, nickname, xp, level, founder_number)
+  values (new.id, requested_nickname, 0, 1, null)
   on conflict (id) do nothing;
   return new;
 end;
@@ -139,3 +144,33 @@ drop trigger if exists on_auth_user_created_profile on auth.users;
 create trigger on_auth_user_created_profile
 after insert on auth.users
 for each row execute procedure public.create_profile_for_new_user();
+
+
+-- Prevent users from awarding themselves XP, levels, or founder status.
+create or replace function public.protect_profile_progress()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if auth.uid() is not null then
+    if tg_op = 'INSERT' then
+      new.xp := 0;
+      new.level := 1;
+      new.founder_number := null;
+      new.created_at := now();
+    else
+      new.xp := old.xp;
+      new.level := old.level;
+      new.founder_number := old.founder_number;
+      new.created_at := old.created_at;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists protect_profile_progress on public.profiles;
+create trigger protect_profile_progress
+before insert or update on public.profiles
+for each row execute procedure public.protect_profile_progress();
