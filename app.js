@@ -48,7 +48,7 @@ $('loc').onclick=locate;
 $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latitude,pos.longitude],14);else locate()};
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
-const APP_VERSION='v5.2';
+const APP_VERSION='v5.3';
 const VALHALLA_URL='https://misty-disk-3dfe.i-riveraseguro.workers.dev';
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
@@ -60,19 +60,40 @@ function destinationPoint(lat,lon,distanceKm,bearingDeg){
   return {lat:p2*180/Math.PI,lon:((l2*180/Math.PI+540)%360)-180};
 }
 function clearRoute(){if(!map) return; if(routeLine){map.removeLayer(routeLine);routeLine=null}routeMarkers.forEach(m=>map.removeLayer(m));routeMarkers=[]}
+function refreshManualPointLabels(){
+  manualWaypoints.forEach((point,index)=>{
+    point.name='Punto '+(index+1);
+    const marker=manualMarkers.find(m=>m._manualPointId===point.id);
+    if(marker){
+      marker.setIcon(L.divIcon({className:'manual-point-icon',html:'<div class="manual-point">'+(index+1)+'</div>',iconSize:[30,30],iconAnchor:[15,15]}));
+      marker.setPopupContent('<b>Punto '+(index+1)+'</b><br>Punto de paso de tu ruta<br><button type="button" class="delete-manual-point" onclick="removeManualWaypoint('+point.id+')">🗑️ Borrar solo este punto</button>');
+    }
+  });
+}
+function removeManualWaypoint(id){
+  const index=manualWaypoints.findIndex(p=>p.id===id);
+  if(index<0)return;
+  manualWaypoints.splice(index,1);
+  const markerIndex=manualMarkers.findIndex(m=>m._manualPointId===id);
+  if(markerIndex>=0){if(map)map.removeLayer(manualMarkers[markerIndex]);manualMarkers.splice(markerIndex,1)}
+  refreshManualPointLabels();
+  manualRouteActive=false;
+  $('mapStatus').textContent='🗑️ Punto eliminado. Quedan '+manualWaypoints.length+'. Puedes añadir otro o terminar los puntos.';
+}
 function addManualWaypoint(latlng){
   const region=$('region').value,island=ISLANDS[region];
   if(island&&!pointInBox(latlng.lat,latlng.lng,island.box)){$('mapStatus').textContent='⚠️ Coloca los puntos dentro de la isla seleccionada.';return}
-  const n=manualWaypoints.length+1;manualWaypoints.push({name:'Punto '+n,lat:latlng.lat,lon:latlng.lng});
-  const icon=L.divIcon({className:'manual-point-icon',html:'<div class="manual-point">'+n+'</div>',iconSize:[30,30],iconAnchor:[15,15]});
-  const marker=L.marker([latlng.lat,latlng.lng],{icon,draggable:true}).addTo(map);
-  marker.on('dragend',()=>{const p=marker.getLatLng();manualWaypoints[n-1].lat=p.lat;manualWaypoints[n-1].lon=p.lng});
-  marker.bindPopup('<b>Punto '+n+'</b><br>Punto de paso de tu ruta');manualMarkers.push(marker);manualRouteActive=false;
-  $('mapStatus').textContent='📍 '+n+' punto(s) colocados. Añade al menos 2 y pulsa «Terminar puntos».';
+  const id=Date.now()+Math.floor(Math.random()*1000);
+  manualWaypoints.push({id,name:'Punto '+manualWaypoints.length,lat:latlng.lat,lon:latlng.lng});
+  const marker=L.marker([latlng.lat,latlng.lng],{draggable:true}).addTo(map);
+  marker._manualPointId=id;
+  marker.on('dragend',()=>{const p=marker.getLatLng(),point=manualWaypoints.find(w=>w.id===id);if(point){point.lat=p.lat;point.lon=p.lng;manualRouteActive=false}});
+  manualMarkers.push(marker);refreshManualPointLabels();marker.openPopup();manualRouteActive=false;
+  $('mapStatus').textContent='📍 '+manualWaypoints.length+' punto(s) colocados. Toca un punto para borrarlo individualmente. Añade al menos 2 y pulsa «Terminar puntos».';
 }
 function startManualRoute(){manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
 function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
-function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Puntos borrados.'}
+function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
 
 const PENINSULA={
   barcelona:{name:'Barcelona',lat:41.3874,lon:2.1686,targets:{Mixta:[41.73,2.25],Curvas:[41.65,2.45],Costa:[41.96,3.20],Montaña:[42.15,2.52]}},
