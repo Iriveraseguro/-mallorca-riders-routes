@@ -308,31 +308,55 @@ function routeBounds(coords){
   ];
 }
 
-async function findRealStop(coords,stop){
-  const selector=poiQueryForStop(stop); if(!selector.length)return null;
-  const [s,w,n,e]=routeBounds(coords);
-  const query=`[out:json][timeout:12];(${selector.map(q=>`${q}(${s},${w},${n},${e});`).join('')});out center tags;`;
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+function escapeHtml(value){
+  return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function stopIcon(stop){
+  if(stop.includes('Restaurante'))return '🍽️';
+  if(stop.includes('Café'))return '☕';
+  if(stop.includes('Bar'))return '🍺';
+  if(stop.includes('Gasolinera'))return '⛽';
+  if(stop.includes('Mirador'))return '📸';
+  return '📍';
+}
+async function findRealStops(coords,stop){
+  const selector=poiQueryForStop(stop);
+  if(!selector.length)return {places:[],error:null};
   try{
-    const res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:query,signal:controller.signal});
-    if(!res.ok)throw new Error('overpass http');
+    const bounds=routeBounds(coords).map(Number);
+    const padLat=0.035,padLon=0.045;
+    const s=(bounds[0]-padLat).toFixed(6),w=(bounds[1]-padLon).toFixed(6);
+    const n=(bounds[2]+padLat).toFixed(6),e=(bounds[3]+padLon).toFixed(6);
+    const clauses=selector.map(q=>q+'('+s+','+w+','+n+','+e+');').join('');
+    const query='[out:json][timeout:20];('+clauses+');out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),22000);
+    let res;
+    try{
+      res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:query,signal:controller.signal});
+    }finally{clearTimeout(timer)}
+    if(!res.ok)throw new Error('Overpass HTTP '+res.status);
     const data=await res.json();
     const candidates=(data.elements||[]).map(el=>({
-      lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,
-      name:el.tags?.name||stop.replace(/^\S+\s*/,''),tags:el.tags||{}
-    })).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon)&&x.name);
-    if(!candidates.length)return null;
-    let best=null,bestScore=Infinity;
-    for(const c of candidates){
+      id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,
+      name:el.tags?.name||el.tags?.brand||el.tags?.operator||'Establecimiento sin nombre',tags:el.tags||{}
+    })).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
+    const stride=Math.max(1,Math.floor(coords.length/100));
+    const places=candidates.map(c=>{
       let nearest=Infinity;
-      for(let i=0;i<coords.length;i+=Math.max(1,Math.floor(coords.length/80)))nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));
-      if(nearest<bestScore){bestScore=nearest;best=c}
+      for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));
+      return {...c,distanceKm:nearest};
+    }).filter(c=>c.distanceKm<=5).sort((a,b)=>a.distanceKm-b.distanceKm);
+    const unique=[];
+    for(const p of places){
+      if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;
+      unique.push(p);if(unique.length>=30)break;
     }
-    return bestScore<=3?{...best,distanceKm:bestScore}:null;
-  }catch(e){console.warn('No se pudo consultar paradas OSM',e);return null}
-  finally{clearTimeout(timer)}
+    return {places:unique,error:null};
+  }catch(e){
+    console.warn('No se pudieron consultar establecimientos de OpenStreetMap',e);
+    return {places:[],error:String(e?.message||e||'error de consulta')};
+  }
 }
-
 async function requestRoute(locations,plan){
   // Pedimos a Valhalla una geometría GeoJSON directamente. Así evitamos
   // cualquier error de decodificación de polilíneas y dibujamos exactamente
@@ -404,19 +428,26 @@ async function generateRoute(){
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
     chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
-    let realStop=null;
+    let realStop=null,realStops=[],poiError=null;
     if($('stop').value!=='none'){
-      $('mapStatus').textContent='📍 Buscando una parada real cerca de la ruta…';
-      realStop=await findRealStop(result.coords,$('stop').value);
-      if(realStop)routeMarkers.push(L.marker([realStop.lat,realStop.lon]).addTo(map).bindPopup(`<b>${realStop.name}</b><br>${$('stop').value}`));
+      $('mapStatus').textContent='📍 Buscando establecimientos reales cerca de la ruta…';
+      const poiResult=await findRealStops(result.coords,$('stop').value);
+      realStops=poiResult.places;poiError=poiResult.error;
+      const icon=stopIcon($('stop').value);
+      realStops.forEach(place=>{
+        const popup='<b>'+escapeHtml(place.name)+'</b><br>'+icon+' '+escapeHtml($('stop').value)+'<br>A '+place.distanceKm.toFixed(1)+' km de la ruta';
+        routeMarkers.push(L.marker([place.lat,place.lon]).addTo(map).bindPopup(popup));
+      });
+      realStop=realStops[0]||null;
     }
     map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
     render(current);
-    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}`;
+    const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
+    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
   }catch(e){
     console.error('Error al generar ruta:',e);
     const reason=String(e?.message||e||'ERROR_DESCONOCIDO');
@@ -433,7 +464,7 @@ async function generateRoute(){
 }
 $('generate').onclick=generateRoute;
 
-function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.realStop?`📍 ${r.stop} · <b>${r.realStop.name}</b>`:`${r.stop} · No se encontró una parada cercana`)}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
+function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">\${r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?\`📍 \${r.realStops.length} establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.\`:\`\${r.stop} · No se encontraron establecimientos con nombre a menos de 5 km de la ruta.\`))}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 function save(){let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list()}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${r.name}</b><br><small>${r.km} · ${r.duration} · ${r.type||type}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
