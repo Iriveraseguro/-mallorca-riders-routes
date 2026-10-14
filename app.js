@@ -440,7 +440,9 @@ async function generateRoute(){
       });
       realStop=realStops[0]||null;
     }
-    map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+    const viewBounds=routeLine.getBounds();
+    realStops.forEach(place=>viewBounds.extend([place.lat,place.lon]));
+    map.fitBounds(viewBounds,{padding:[30,30]});
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
