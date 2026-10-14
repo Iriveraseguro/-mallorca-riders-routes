@@ -306,14 +306,23 @@ function routeShapeIsInRegion(coords,region,geometry){
 }
 
 function poiQueryForStop(stop){
-  if(stop.includes('Restaurante'))return ['node["amenity"="restaurant"]','way["amenity"="restaurant"]'];
+  if(stop==='all')return ['node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]','way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]','node["tourism"="viewpoint"]','way["tourism"="viewpoint"]'];
+  if(stop.includes('Restaurante'))return ['node["amenity"~"^(restaurant|fast_food)$"]','way["amenity"~"^(restaurant|fast_food)$"]'];
   if(stop.includes('Café'))return ['node["amenity"="cafe"]','way["amenity"="cafe"]'];
-  if(stop.includes('Bar'))return ['node["amenity"="bar"]','way["amenity"="bar"]'];
+  if(stop.includes('Bar'))return ['node["amenity"~"^(bar|pub)$"]','way["amenity"~"^(bar|pub)$"]'];
   if(stop.includes('Gasolinera'))return ['node["amenity"="fuel"]','way["amenity"="fuel"]'];
   if(stop.includes('Mirador'))return ['node["tourism"="viewpoint"]','way["tourism"="viewpoint"]'];
   return [];
 }
-
+function placeCategory(tags){
+  if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
+  if(tags.amenity==='fuel')return {name:'Gasolinera',emoji:'⛽',color:'#f97316'};
+  if(tags.amenity==='cafe')return {name:'Cafetería',emoji:'☕',color:'#f59e0b'};
+  if(tags.amenity==='bar'||tags.amenity==='pub')return {name:'Bar',emoji:'🍺',color:'#3b82f6'};
+  if(tags.amenity==='restaurant'||tags.amenity==='fast_food')return {name:'Restaurante',emoji:'🍽️',color:'#ef4444'};
+  return {name:'Establecimiento',emoji:'📍',color:'#64748b'};
+}
+function poiMarkerIcon(category){return L.divIcon({className:'poi-div-icon',html:'<div class="poi-marker" style="--poi-color:'+category.color+'">'+category.emoji+'</div>',iconSize:[34,34],iconAnchor:[17,17]});}
 function routeBounds(coords){
   const points=coords.filter(p=>Array.isArray(p)&&Number.isFinite(p[0])&&Number.isFinite(p[1]));
   if(!points.length)throw new Error('ROUTE_BOUNDS_EMPTY');
@@ -338,42 +347,22 @@ function stopIcon(stop){
   return '📍';
 }
 async function findRealStops(coords,stop){
-  const selector=poiQueryForStop(stop);
-  if(!selector.length)return {places:[],error:null};
+  const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    const bounds=routeBounds(coords).map(Number);
-    const padLat=0.035,padLon=0.045;
-    const s=(bounds[0]-padLat).toFixed(6),w=(bounds[1]-padLon).toFixed(6);
-    const n=(bounds[2]+padLat).toFixed(6),e=(bounds[3]+padLon).toFixed(6);
-    const clauses=selector.map(q=>q+'('+s+','+w+','+n+','+e+');').join('');
-    const query='[out:json][timeout:20];('+clauses+');out center tags;';
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),22000);
-    let res;
-    try{
-      res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:query,signal:controller.signal});
-    }finally{clearTimeout(timer)}
+    const bounds=routeBounds(coords).map(Number),padLat=0.035,padLon=0.045;
+    const south=(bounds[0]-padLat).toFixed(6),west=(bounds[1]-padLon).toFixed(6),north=(bounds[2]+padLat).toFixed(6),east=(bounds[3]+padLon).toFixed(6);
+    const clauses=selector.map(q=>q+'('+south+','+west+','+north+','+east+');').join('');
+    const query='[out:json][timeout:25];('+clauses+');out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),28000);let res;
+    try{res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
     if(!res.ok)throw new Error('Overpass HTTP '+res.status);
     const data=await res.json();
-    const candidates=(data.elements||[]).map(el=>({
-      id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,
-      name:el.tags?.name||el.tags?.brand||el.tags?.operator||'Establecimiento sin nombre',tags:el.tags||{}
-    })).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
-    const stride=Math.max(1,Math.floor(coords.length/100));
-    const places=candidates.map(c=>{
-      let nearest=Infinity;
-      for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));
-      return {...c,distanceKm:nearest};
-    }).filter(c=>c.distanceKm<=5).sort((a,b)=>a.distanceKm-b.distanceKm);
-    const unique=[];
-    for(const p of places){
-      if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;
-      unique.push(p);if(unique.length>=30)break;
-    }
+    const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
+    const stride=Math.max(1,Math.floor(coords.length/140));
+    const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=5).sort((a,b)=>a.distanceKm-b.distanceKm);
+    const unique=[];for(const p of places){if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;unique.push(p);if(unique.length>=80)break}
     return {places:unique,error:null};
-  }catch(e){
-    console.warn('No se pudieron consultar establecimientos de OpenStreetMap',e);
-    return {places:[],error:String(e?.message||e||'error de consulta')};
-  }
+  }catch(e){console.warn('No se pudieron consultar establecimientos de OpenStreetMap',e);return {places:[],error:String(e?.message||e||'error de consulta')}}
 }
 async function requestRoute(locations,plan){
   // Pedimos a Valhalla una geometría GeoJSON directamente. Así evitamos
@@ -453,8 +442,11 @@ async function generateRoute(){
       realStops=poiResult.places;poiError=poiResult.error;
       const icon=stopIcon($('stop').value);
       realStops.forEach(place=>{
-        const popup='<b>'+escapeHtml(place.name)+'</b><br>'+icon+' '+escapeHtml($('stop').value)+'<br>A '+place.distanceKm.toFixed(1)+' km de la ruta';
-        routeMarkers.push(L.marker([place.lat,place.lon]).addTo(map).bindPopup(popup));
+        const cat=place.category;
+        const popup='<b>'+escapeHtml(place.name)+'</b><br>'+cat.emoji+' '+cat.name+'<br>A '+place.distanceKm.toFixed(1)+' km de la ruta';
+        const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
+        marker.bindTooltip(cat.emoji+' '+escapeHtml(place.name),{sticky:true,direction:'top',opacity:0.96});
+        routeMarkers.push(marker);
       });
       realStop=realStops[0]||null;
     }
