@@ -506,12 +506,7 @@ async function generateRoute(){
     const {result,candidate:chosen}=valid[0];
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
-    if(plan.manual){
-      manualWaypoints.forEach((p,index)=>{
-        const marker=L.marker([p.lat,p.lon],{icon:L.divIcon({className:'manual-point-icon',html:'<div class="manual-point">'+(index+1)+'</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map).bindPopup('🏍️ Punto '+(index+1)+' · La ruta debe pasar por este punto');
-        routeMarkers.push(marker);
-      });
-    }else{
+    if(!plan.manual){
       chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
     }
     let realStop=null,realStops=[],poiError=null;
