@@ -207,11 +207,34 @@ function updateRegionUI(){
     $('mapStatus').textContent=`${region==='mallorca'?'🏝️':'🏝️'} Ruta solo por ${island.name}.`;
   }
 }
+async function refreshApplication(){
+  const button=$('refreshApp');
+  if(button){button.disabled=true;button.textContent='⏳ Comprobando…'}
+  try{
+    if('serviceWorker' in navigator){
+      const registration=await navigator.serviceWorker.getRegistration();
+      if(registration){
+        await registration.update();
+        const worker=registration.installing||registration.waiting;
+        if(worker&&worker.state!=='activated'){
+          await new Promise(resolve=>{
+            const timeout=setTimeout(resolve,8000);
+            worker.addEventListener('statechange',()=>{
+              if(worker.state==='activated'||worker.state==='redundant'){clearTimeout(timeout);resolve()}
+            });
+          });
+        }
+      }
+    }
+  }catch(error){console.warn('No se pudo comprobar la actualización',error)}
+  window.location.reload();
+}
 function initApp(){
   if(!initMap()){ $('mapStatus').textContent='⚠️ No se pudo cargar el mapa. Recarga la página.'; return; }
   $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;
+  $('refreshApp').onclick=refreshApplication;
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
   updateRegionUI();
