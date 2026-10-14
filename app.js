@@ -296,6 +296,18 @@ function poiQueryForStop(stop){
   return [];
 }
 
+function routeBounds(coords){
+  const points=coords.filter(p=>Array.isArray(p)&&Number.isFinite(p[0])&&Number.isFinite(p[1]));
+  if(!points.length)throw new Error('ROUTE_BOUNDS_EMPTY');
+  const lats=points.map(p=>p[0]),lons=points.map(p=>p[1]);
+  return [
+    Math.min(...lats).toFixed(6),
+    Math.min(...lons).toFixed(6),
+    Math.max(...lats).toFixed(6),
+    Math.max(...lons).toFixed(6)
+  ];
+}
+
 async function findRealStop(coords,stop){
   const selector=poiQueryForStop(stop); if(!selector.length)return null;
   const [s,w,n,e]=routeBounds(coords);
