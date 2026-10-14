@@ -398,11 +398,29 @@ async function findRealStops(coords,stop){
     const bounds=routeBounds(coords).map(Number),padLat=0.035,padLon=0.045;
     const south=(bounds[0]-padLat).toFixed(6),west=(bounds[1]-padLon).toFixed(6),north=(bounds[2]+padLat).toFixed(6),east=(bounds[3]+padLon).toFixed(6);
     const clauses=selector.map(q=>q+'('+south+','+west+','+north+','+east+');').join('');
-    const query='[out:json][timeout:25];('+clauses+');out center tags;';
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),28000);let res;
-    try{res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
-    if(!res.ok)throw new Error('Overpass HTTP '+res.status);
-    const data=await res.json();
+    const query='[out:json][timeout:20];('+clauses+');out center tags;';
+    // Overpass tiene varios servidores públicos: si uno está caído o saturado,
+    // probamos otro antes de dar por fallida la búsqueda.
+    const endpoints=[
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass.private.coffee/api/interpreter'
+    ];
+    let data=null,lastError='sin respuesta';
+    for(const endpoint of endpoints){
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),22000);
+      try{
+        const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+        if(!res.ok)throw new Error('HTTP '+res.status);
+        const json=await res.json();
+        if(!Array.isArray(json.elements))throw new Error('respuesta no válida');
+        data=json;break;
+      }catch(err){
+        lastError=String(err?.message||err||'error de consulta');
+        console.warn('Falló servidor de establecimientos '+endpoint,lastError);
+      }finally{clearTimeout(timer)}
+    }
+    if(!data)throw new Error(lastError);
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
     const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=5).sort((a,b)=>a.distanceKm-b.distanceKm);
