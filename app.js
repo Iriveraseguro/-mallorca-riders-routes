@@ -183,7 +183,33 @@ window.addEventListener('load',initApp,{once:true});
 function routePlan(){
   const region=$('region').value;
   const st=getStartAndTarget();if(!st)return null;
-  return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),label:st.label,region};
+  const durationHours=parseFloat($('duration').value||'3')||3;
+  return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),requestedMinutes:durationHours*60,curves:Number($('curves').value)||3,type,label:st.label,region};
+}
+function buildRouteCandidates(plan){
+  const candidates=[];
+  const add=(targets,variant)=>{
+    if(!targets?.length)return;
+    const signature=targets.map(p=>p.name||`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`).join('|');
+    if(candidates.some(c=>c.signature===signature))return;
+    candidates.push({...plan,targets,signature,variant});
+  };
+  add(plan.targets,'base');
+  const island=ISLANDS[plan.region];
+  if(island){
+    const pool=(island.waypoints[plan.type]||island.waypoints.Mixta).filter(p=>distanceKm(plan.start,p)>5);
+    const scored=pool.map(p=>({...p,d:distanceKm(plan.start,p)})).sort((a,b)=>Math.abs(a.d-plan.requestedKm*0.22)-Math.abs(b.d-plan.requestedKm*0.22));
+    for(let i=0;i<scored.length&&candidates.length<5;i++)for(let j=i+1;j<scored.length&&candidates.length<5;j++){
+      const a=scored[i],b=scored[j];if(distanceKm(a,b)<4)continue;
+      add([a,b].sort((x,y)=>x.d-y.d),`waypoints-${i}-${j}`);
+    }
+  }
+  return candidates.slice(0,5);
+}
+function routeScore(result,plan){
+  const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
+  const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
+  return kmError*0.78+timeError*0.22;
 }
 
 function decodePolyline6(str){
@@ -301,7 +327,7 @@ async function requestRoute(locations,plan){
         use_highways:$('motor').checked?0.05:1,
         use_ferry:0,
         use_tolls:0.3,
-        use_tracks:0.15
+        use_tracks:plan.type==='Montaña'?0.25:0.12
       }
     }
   };
@@ -336,28 +362,38 @@ async function requestRoute(locations,plan){
 }
 async function generateRoute(){
   const plan=routePlan();if(!plan)return;
-  const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';$('mapStatus').textContent='🧭 Calculando una ruta real, solo por carreteras terrestres…';clearRoute();
+  const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';
+  $('mapStatus').textContent='🧭 Comparando alternativas para acercarnos a los km y duración elegidos…';clearRoute();
   try{
-    const noFerryFilter=ISLANDS[plan.region]?{exclude_ferry:true}:{};
-    let locations=[{lat:plan.start.lat,lon:plan.start.lon,type:'break',search_filter:noFerryFilter}];
-    plan.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:noFerryFilter}));
-    if($('circle').checked)locations.push({lat:plan.start.lat,lon:plan.start.lon,type:'break',search_filter:noFerryFilter});
-    const result=await requestRoute(locations,plan);
+    const alternatives=buildRouteCandidates(plan);
+    const settled=await Promise.allSettled(alternatives.map(async candidate=>{
+      const filter=ISLANDS[candidate.region]?{exclude_ferry:true}:{};
+      const locations=[{lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter}];
+      candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
+      if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
+      const result=await requestRoute(locations,candidate);
+      return {result,candidate,score:routeScore(result,candidate)};
+    }));
+    const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
+    if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
+    valid.sort((a,b)=>a.score-b.score);
+    const {result,candidate:chosen}=valid[0];
+    const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
-    plan.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
+    chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
     let realStop=null;
     if($('stop').value!=='none'){
       $('mapStatus').textContent='📍 Buscando una parada real cerca de la ruta…';
       realStop=await findRealStop(result.coords,$('stop').value);
-      if(realStop){
-        routeMarkers.push(L.marker([realStop.lat,realStop.lon]).addTo(map).bindPopup(`<b>${realStop.name}</b><br>${$('stop').value}`));
-      }
+      if(realStop)routeMarkers.push(L.marker([realStop.lat,realStop.lon]).addTo(map).bindPopup(`<b>${realStop.name}</b><br>${$('stop').value}`));
     }
     map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label};
-    render(current);$('mapStatus').textContent=`🏍️ Ruta terrestre calculada: ${km} km · ${duration}`;
+    const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    render(current);
+    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}`;
   }catch(e){
     console.error(e);
     const msg=e.message==='ROUTE_HAS_FERRY'?'⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.':e.message==='ROUTE_LEFT_ISLAND'?`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`:e.message==='ISLAND_BOUNDARY_UNAVAILABLE'?'⚠️ No he podido verificar el contorno real de la isla. No voy a mostrar una ruta sin esa comprobación.':e.message==='TIMEOUT'?'⚠️ El servidor de rutas está tardando demasiado.':e.message==='NETWORK'?'⚠️ No hay conexión con el servidor de rutas.':e.message.startsWith('HTTP_')?'⚠️ El servidor de rutas ha rechazado la petición. Prueba de nuevo en unos segundos.':'⚠️ No se pudo calcular la ruta ahora. Pulsa «GENERAR RUTA» de nuevo.';
