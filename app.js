@@ -409,27 +409,25 @@ async function findRealStops(coords,stop){
     const query='[out:json][timeout:40];('+clauses+');out center tags;';
     // Overpass tiene varios servidores públicos: si uno está caído o saturado,
     // probamos otro antes de dar por fallida la búsqueda.
-    const endpoints=[
-      'https://misty-disk-3dfe.i-riveraseguro.workers.dev/overpass',
-      'https://overpass-api.de/api/interpreter',
-      'https://overpass.kumi.systems/api/interpreter',
-      'https://overpass.private.coffee/api/interpreter'
-    ];
-    let data=null,lastError='sin respuesta';
-    for(const endpoint of endpoints){
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
-      try{
-        const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
-        if(!res.ok)throw new Error('HTTP '+res.status);
-        const json=await res.json();
-        if(!Array.isArray(json.elements))throw new Error('respuesta no válida');
-        data=json;break;
-      }catch(err){
-        lastError=String(err?.message||err||'error de consulta');
-        console.warn('Falló servidor de establecimientos '+endpoint,lastError);
-      }finally{clearTimeout(timer)}
-    }
-    if(!data)throw new Error(lastError);
+    // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
+    const endpoint='https://misty-disk-3dfe.i-riveraseguro.workers.dev/overpass';
+    let data=null;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
+    try{
+      const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+      if(!res.ok){
+        let detail='';
+        try{
+          const errData=await res.json();
+          detail=errData.detail||errData.error||'';
+        }catch(_){}
+        throw new Error('HTTP '+res.status+(detail?' — '+detail:''));
+      }
+      const json=await res.json();
+      if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
+      data=json;
+    }finally{clearTimeout(timer)}
+    if(!data)throw new Error('sin respuesta del servidor');
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
     const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=5).sort((a,b)=>a.distanceKm-b.distanceKm);
