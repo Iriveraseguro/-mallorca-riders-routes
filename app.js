@@ -406,13 +406,13 @@ async function findRealStops(coords,stop){
     const bounds=routeBounds(coords).map(Number),padLat=0.012,padLon=0.015;
     const south=(bounds[0]-padLat).toFixed(6),west=(bounds[1]-padLon).toFixed(6),north=(bounds[2]+padLat).toFixed(6),east=(bounds[3]+padLon).toFixed(6);
     const clauses=selector.map(q=>q+'('+south+','+west+','+north+','+east+');').join('');
-    const query='[out:json][timeout:40];('+clauses+');out center tags;';
+    const query='[out:json][timeout:10];('+clauses+');out center tags;';
     // Overpass tiene varios servidores públicos: si uno está caído o saturado,
     // probamos otro antes de dar por fallida la búsqueda.
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='https://misty-disk-3dfe.i-riveraseguro.workers.dev/overpass';
     let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
     try{
       const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
