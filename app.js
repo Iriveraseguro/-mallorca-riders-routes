@@ -358,15 +358,33 @@ function routeShapeIsInRegion(coords,region,geometry){
   // de una isla no debe depender de una caja aproximada.
   return false;
 }
-
 function poiQueryForStop(stop){
-  if(stop==='all')return ['node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]','way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]','node["tourism"="viewpoint"]','way["tourism"="viewpoint"]'];
-  if(stop.includes('Restaurante'))return ['node["amenity"~"^(restaurant|fast_food)$"]','way["amenity"~"^(restaurant|fast_food)$"]'];
-  if(stop.includes('Café'))return ['node["amenity"="cafe"]','way["amenity"="cafe"]'];
-  if(stop.includes('Bar'))return ['node["amenity"~"^(bar|pub)$"]','way["amenity"~"^(bar|pub)$"]'];
-  if(stop.includes('Gasolinera'))return ['node["amenity"="fuel"]','way["amenity"="fuel"]'];
-  if(stop.includes('Mirador'))return ['node["tourism"="viewpoint"]','way["tourism"="viewpoint"]'];
+  if(stop==='all')return [
+    'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+  ];
+  if(stop.includes('Restaurante'))return [
+    'node["amenity"~"^(restaurant|fast_food)$"]',
+    'way["amenity"~"^(restaurant|fast_food)$"]'
+  ];
+  if(stop.includes('Café')||stop.includes('Bar'))return [
+    'node["amenity"~"^(cafe|bar|pub)$"]',
+    'way["amenity"~"^(cafe|bar|pub)$"]'
+  ];
+  if(stop.includes('Gasolinera'))return [
+    'node["amenity"="fuel"]',
+    'way["amenity"="fuel"]'
+  ];
   return [];
+}
+
+function placeCategory(tags){
+  if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
+  if(tags.amenity==='fuel')return {name:'Gasolinera',emoji:'⛽',color:'#f97316'};
+  if(tags.amenity==='cafe')return {name:'Cafetería',emoji:'☕',color:'#f59e0b'};
+  if(tags.amenity==='bar'||tags.amenity==='pub')return {name:'Bar',emoji:'🍺',color:'#3b82f6'};
+  if(tags.amenity==='restaurant'||tags.amenity==='fast_food')return {name:'Restaurante',emoji:'🍽️',color:'#ef4444'};
+  return {name:'Establecimiento',emoji:'📍',color:'#64748b'};
 }
 function placeCategory(tags){
   if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
