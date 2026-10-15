@@ -271,12 +271,12 @@ function buildRouteCandidates(plan){
   if(island){
     const pool=(island.waypoints[plan.type]||island.waypoints.Mixta).filter(p=>distanceKm(plan.start,p)>5);
     const scored=pool.map(p=>({...p,d:distanceKm(plan.start,p)})).sort((a,b)=>Math.abs(a.d-plan.requestedKm*0.22)-Math.abs(b.d-plan.requestedKm*0.22));
-    for(let i=0;i<scored.length&&candidates.length<5;i++)for(let j=i+1;j<scored.length&&candidates.length<5;j++){
+    for(let i=0;i<scored.length&&candidates.length<3;i++)for(let j=i+1;j<scored.length&&candidates.length<3;j++){
       const a=scored[i],b=scored[j];if(distanceKm(a,b)<4)continue;
       add([a,b].sort((x,y)=>x.d-y.d),`waypoints-${i}-${j}`);
     }
   }
-  return candidates.slice(0,5);
+  return candidates.slice(0,3);
 }
 function routeScore(result,plan){
   const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
