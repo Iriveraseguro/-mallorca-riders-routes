@@ -403,12 +403,17 @@ function stopIcon(stop){
 async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    const bounds=routeBounds(coords).map(Number),padLat=0.012,padLon=0.015;
-    const south=(bounds[0]-padLat).toFixed(6),west=(bounds[1]-padLon).toFixed(6),north=(bounds[2]+padLat).toFixed(6),east=(bounds[3]+padLon).toFixed(6);
-    const clauses=selector.map(q=>q+'('+south+','+west+','+north+','+east+');').join('');
+    // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
+    // un rectángulo enorme que incluye mucha zona ajena a la ruta.
+    const sampleCount=Math.min(10,Math.max(4,Math.ceil(coords.length/80)));
+    const samples=[];
+    for(let i=0;i<sampleCount;i++){
+      const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
+      const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
+      if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
+    }
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:4000,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:10];('+clauses+');out center tags;';
-    // Overpass tiene varios servidores públicos: si uno está caído o saturado,
-    // probamos otro antes de dar por fallida la búsqueda.
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='https://misty-disk-3dfe.i-riveraseguro.workers.dev/overpass';
     let data=null;
