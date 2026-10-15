@@ -552,9 +552,67 @@ $('generate').onclick=generateRoute;
 
 function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 5 km de la ruta.')))}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
-function save(){let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list()}
-function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${r.name}</b><br><small>${r.km} · ${r.duration} · ${r.type||type}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
+async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
+function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
 function repeat(i){current=get()[i];render(current)}
 async function share(){let t=`🏍️ ${current.name}\n${current.km} · ${current.duration}\nMallorca Riders Routes`;if(navigator.share)await navigator.share({title:current.name,text:t});else if(navigator.clipboard)await navigator.clipboard.writeText(t)}
 function maps(){window.open(pos?`https://www.google.com/maps/dir/?api=1&origin=${pos.latitude},${pos.longitude}&destination=${pos.latitude},${pos.longitude}&travelmode=driving`:'https://www.google.com/maps','_blank')}
 list();
+
+/* Cuenta y sincronización con Supabase. La clave publishable está diseñada para el cliente;
+   el acceso a los datos lo limita RLS en la tabla routes. */
+const SUPABASE_URL='https://btgnisuqbwmgnjmzdiik.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY='sb_publishable_JNnQlrSyEYhAgpq5URmvGw_atnRO_B3';
+let sbClient=null,sbSession=null;
+function setAuthStatus(message){const el=$('authStatus');if(el)el.textContent=message}
+function setAuthUI(session){
+  sbSession=session||null;
+  const signedIn=!!sbSession;
+  $('authSignedIn').classList.toggle('hidden',!signedIn);
+  $('authEmail').classList.toggle('hidden',signedIn);
+  $('authPassword').classList.toggle('hidden',signedIn);
+  $('signUp').classList.toggle('hidden',signedIn);
+  $('signIn').classList.toggle('hidden',signedIn);
+  $('authUser').textContent=signedIn?'Sesión iniciada: '+(sbSession.user.email||'usuario'):'';
+  if(signedIn){setAuthStatus('Cuenta conectada. Sincronizando tus rutas guardadas…');loadCloudRoutes()}
+  else setAuthStatus('Puedes seguir usando la app sin registrarte; tus rutas se guardarán solo en este dispositivo.');
+}
+async function loadCloudRoutes(){
+  if(!sbClient||!sbSession)return;
+  try{
+    const {data,error}=await sbClient.from('routes').select('id,name,description,region,route_type,distance_km,duration_minutes,route_data,created_at').order('created_at',{ascending:false}).limit(50);
+    if(error)throw error;
+    const local=get();
+    const cloud=(data||[]).map(row=>({...((row.route_data&&typeof row.route_data==='object')?row.route_data:{}),id:row.route_data?.id??row.id,cloudId:row.id,name:row.name||row.route_data?.name||'Ruta',km:(row.distance_km||0)+' km',duration:row.route_data?.duration||((row.duration_minutes||0)+' min'),region:row.region||'mallorca',type:row.route_type||'Mixta',createdAt:row.created_at}));
+    const merged=[...cloud,...local.filter(l=>!cloud.some(c=>String(c.id)===String(l.id)))].slice(0,50);
+    localStorage.setItem('mrr',JSON.stringify(merged));list();
+    setAuthStatus('✅ Cuenta conectada. Tus rutas de la nube están sincronizadas.');
+  }catch(e){console.error('Error cargando rutas de Supabase',e);setAuthStatus('Has iniciado sesión, pero no se pudieron cargar las rutas: '+(e.message||'error de conexión'))}
+}
+async function initSupabaseAuth(){
+  if(!window.supabase||typeof window.supabase.createClient!=='function'){setAuthStatus('No se pudo cargar el servicio de cuentas. Puedes seguir usando las rutas guardadas en este dispositivo.');return}
+  sbClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+  const {data,error}=await sbClient.auth.getSession();
+  if(error)console.warn('No se pudo recuperar la sesión',error);
+  setAuthUI(data?.session||null);
+  sbClient.auth.onAuthStateChange((_event,session)=>{setAuthUI(session)});
+}
+$('signUp').onclick=async()=>{
+  const email=$('authEmail').value.trim(),password=$('authPassword').value;
+  if(!email||password.length<6){setAuthStatus('Introduce un correo válido y una contraseña de al menos 6 caracteres.');return}
+  $('signUp').disabled=true;setAuthStatus('Creando tu cuenta…');
+  try{const {data,error}=await sbClient.auth.signUp({email,password});if(error)throw error;if(data.session){setAuthUI(data.session)}else setAuthStatus('Cuenta creada. Revisa tu correo para confirmar el registro y después inicia sesión.')}
+  catch(e){setAuthStatus('No se pudo crear la cuenta: '+(e.message||'error'))}
+  finally{$('signUp').disabled=false}
+};
+$('signIn').onclick=async()=>{
+  const email=$('authEmail').value.trim(),password=$('authPassword').value;
+  if(!email||!password){setAuthStatus('Introduce tu correo y contraseña.');return}
+  $('signIn').disabled=true;setAuthStatus('Iniciando sesión…');
+  try{const {data,error}=await sbClient.auth.signInWithPassword({email,password});if(error)throw error;setAuthUI(data.session)}
+  catch(e){setAuthStatus('No se pudo iniciar sesión: '+(e.message||'error'))}
+  finally{$('signIn').disabled=false}
+};
+$('signOut').onclick=async()=>{if(!sbClient)return;const {error}=await sbClient.auth.signOut();if(error)setAuthStatus('No se pudo cerrar sesión: '+error.message);else setAuthUI(null)};
+
+initSupabaseAuth();
