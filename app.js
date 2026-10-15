@@ -410,6 +410,7 @@ async function findRealStops(coords,stop){
     // Overpass tiene varios servidores públicos: si uno está caído o saturado,
     // probamos otro antes de dar por fallida la búsqueda.
     const endpoints=[
+      'https://misty-disk-3dfe.i-riveraseguro.workers.dev/overpass',
       'https://overpass-api.de/api/interpreter',
       'https://overpass.kumi.systems/api/interpreter',
       'https://overpass.private.coffee/api/interpreter'
