@@ -696,7 +696,7 @@ $('signUp').onclick=async()=>{
   const email=$('authEmail').value.trim(),password=$('authPassword').value;
   if(!email||password.length<6){setAuthStatus('Introduce un correo válido y una contraseña de al menos 6 caracteres.');return}
   $('signUp').disabled=true;setAuthStatus('Creando tu cuenta…');
-  try{const {data,error}=await sbClient.auth.signUp({email,password});if(error)throw error;if(data.session){setAuthUI(data.session)}else setAuthStatus('Cuenta creada. Revisa tu correo para confirmar el registro y después inicia sesión.')}
+  try{const {data,error}=await sbClient.auth.signUp({email,password,options:{emailRedirectTo:window.location.origin}});if(error)throw error;if(data.session){setAuthUI(data.session)}else setAuthStatus('Cuenta creada. Revisa tu correo para confirmar el registro y después inicia sesión.')}
   catch(e){setAuthStatus('No se pudo crear la cuenta: '+(e.message||'error'))}
   finally{$('signUp').disabled=false}
 };
