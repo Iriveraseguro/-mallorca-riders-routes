@@ -552,7 +552,7 @@ async function generateRoute(){
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
@@ -594,6 +594,20 @@ function encodePolyline6(coords){
 }
 async function share(){
   if(!current?.shape?.length){alert('Primero genera o abre una ruta.');return}
+  // Compartimos el trazado, los puntos de paso y los establecimientos encontrados.
+  // No se publica la ruta en Supabase ni se exponen otras rutas del usuario.
+  const stops=(Array.isArray(current.realStops)?current.realStops:[]).map(p=>({
+    id:p.id||'',
+    lat:Number(p.lat),
+    lon:Number(p.lon),
+    name:String(p.name||p.category?.name||'Establecimiento'),
+    distanceKm:Number(p.distanceKm||0),
+    tags:p.tags&&typeof p.tags==='object'?p.tags:{},
+    category:p.category&&typeof p.category==='object'?p.category:{name:'Establecimiento',emoji:'📍',color:'#64748b'}
+  })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
+  const routePoints=(Array.isArray(current.routePoints)?current.routePoints:[]).map(p=>({
+    name:String(p.name||'Punto de paso'),lat:Number(p.lat),lon:Number(p.lon)
+  })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
   const params=new URLSearchParams({
     route:encodePolyline6(current.shape),
     name:current.name||'Ruta compartida',
@@ -602,20 +616,23 @@ async function share(){
     curves:String(current.curves||3),
     type:current.type||type,
     region:current.region||'mallorca',
-    circular:current.circular?'1':'0'
+    circular:current.circular?'1':'0',
+    stop:current.stop||'none',
+    stops:JSON.stringify(stops),
+    points:JSON.stringify(routePoints)
   });
   const shareUrl=new URL(window.location.href);
   shareUrl.hash=params.toString();
   const url=shareUrl.toString();
-  const textMessage=`🏍️ ${current.name||'Ruta compartida'}\n${current.km||''} · ${current.duration||''}\nMallorca Riders Routes`;
+  const textMessage=`🏍️ ${current.name||'Ruta compartida'}\n${current.km||''} · ${current.duration||''}\n${stops.length} establecimientos · ${routePoints.length} puntos de paso\nMallorca Riders Routes`;
   if(navigator.share){
     try{await navigator.share({title:current.name||'Ruta compartida',text:textMessage,url})}
     catch(error){if(error?.name!=='AbortError')alert('No se pudo abrir el menú para compartir. Puedes copiar este enlace:\n'+url)}
   }else if(navigator.clipboard){
-    try{await navigator.clipboard.writeText(textMessage+'\n'+url);alert('Enlace de la ruta copiado. Ya puedes enviarlo por WhatsApp.')}
-    catch(_){prompt('Copia este enlace para compartir la ruta:',url)}
+    try{await navigator.clipboard.writeText(textMessage+'\n'+url);alert('Enlace de la ruta completa copiado. Ya puedes enviarlo por WhatsApp.')}
+    catch(_){prompt('Copia este enlace para compartir la ruta completa:',url)}
   }else{
-    prompt('Copia este enlace para compartir la ruta:',url);
+    prompt('Copia este enlace para compartir la ruta completa:',url);
   }
 }
 function loadSharedRoute(){
@@ -625,17 +642,27 @@ function loadSharedRoute(){
   try{
     const shape=decodePolyline6(encoded);
     if(shape.length<2)throw new Error('La ruta compartida no contiene suficientes puntos.');
+    let sharedStops=[],routePoints=[];
+    try{const value=JSON.parse(params.get('stops')||'[]');if(Array.isArray(value))sharedStops=value}catch(_){}
+    try{const value=JSON.parse(params.get('points')||'[]');if(Array.isArray(value))routePoints=value}catch(_){}
+    sharedStops=sharedStops.filter(p=>p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon))).map(p=>({
+      ...p,lat:Number(p.lat),lon:Number(p.lon),
+      category:p.category&&typeof p.category==='object'?p.category:{name:'Establecimiento',emoji:'📍',color:'#64748b'},
+      distanceKm:Number(p.distanceKm||0)
+    }));
+    routePoints=routePoints.filter(p=>p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon))).map(p=>({...p,lat:Number(p.lat),lon:Number(p.lon)}));
     current={
       id:Date.now(),
       name:params.get('name')||'Ruta compartida',
       km:params.get('km')||Math.round(shape.reduce((sum,p,i)=>i?sum+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:p[0],lon:p[1]}):sum,0))+' km',
       duration:params.get('duration')||'',
       curves:Number(params.get('curves')||3),
-      stop:'none',realStop:null,realStops:[],poiError:null,
+      stop:params.get('stop')|| (sharedStops.length?'all':'none'),
+      realStop:sharedStops[0]||null,realStops:sharedStops,poiError:null,
       circular:params.get('circular')==='1',
       createdBy:'un motero',
       type:params.get('type')||'Mixta',
-      shape,
+      shape,routePoints,
       region:params.get('region')||'mallorca',
       start:'Ruta compartida',
       requestedKm:0,requestedDuration:0,
@@ -643,9 +670,22 @@ function loadSharedRoute(){
     };
     clearRoute();
     routeLine=L.polyline(shape,{weight:6,opacity:.9}).addTo(map);
-    map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+    routePoints.forEach((p,i)=>{
+      const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
+      routeMarkers.push(marker);
+    });
+    sharedStops.forEach(place=>{
+      const cat=place.category||{name:'Establecimiento',emoji:'📍',color:'#64748b'};
+      const popup='<b>'+escapeHtml(place.name)+'</b><br>'+escapeHtml(cat.emoji||'📍')+' '+escapeHtml(cat.name||'Establecimiento')+'<br>A '+Number(place.distanceKm||0).toFixed(1)+' km de la ruta';
+      const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
+      marker.bindTooltip((cat.emoji||'📍')+' '+escapeHtml(place.name),{sticky:true,direction:'top',opacity:0.96});
+      routeMarkers.push(marker);
+    });
+    const bounds=routeLine.getBounds();
+    [...routePoints.map(p=>[p.lat,p.lon]),...sharedStops.map(p=>[p.lat,p.lon])].forEach(p=>bounds.extend(p));
+    map.fitBounds(bounds,{padding:[30,30]});
     render(current);
-    $('mapStatus').textContent='🏍️ Estás viendo una ruta compartida. Puedes guardarla o volver a compartirla.';
+    $('mapStatus').textContent='🏍️ Ruta completa compartida: trazado, '+routePoints.length+' puntos de paso y '+sharedStops.length+' establecimientos. Puedes guardarla o volver a compartirla.';
   }catch(error){
     console.error('No se pudo abrir la ruta compartida',error);
     alert('No se ha podido abrir esta ruta compartida. Pide que te envíen un enlace nuevo.');
