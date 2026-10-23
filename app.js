@@ -289,6 +289,8 @@ function initApp(){
   $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
+  $('importRouteButton').onclick=()=>$('importRouteFile').click();
+  $('importRouteFile').onchange=e=>importRouteFile(e.target.files?.[0]);
   $('refreshApp').onclick=refreshApplication;
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
@@ -793,7 +795,75 @@ function loadSharedRoute(){
     alert('No se ha podido abrir esta ruta compartida. Pide que te envíen un enlace nuevo.');
   }
 }
-function maps(){window.open(pos?`https://www.google.com/maps/dir/?api=1&origin=${pos.latitude},${pos.longitude}&destination=${pos.latitude},${pos.longitude}&travelmode=driving`:'https://www.google.com/maps','_blank')}
+function maps(){
+  if(!current?.shape?.length||current.shape.length<2){alert('Primero genera, importa o abre una ruta.');return}
+  const shape=current.shape;
+  const origin=shape[0],destination=shape[shape.length-1];
+  const distanceBetween=(a,b)=>distanceKm({lat:a[0],lon:a[1]},{lat:b[0],lon:b[1]});
+  const total=shape.reduce((sum,p,i)=>i?sum+distanceBetween(shape[i-1],p):sum,0);
+  // Hasta tres puntos intermedios para favorecer compatibilidad con Google Maps móvil.
+  const waypoints=[];
+  for(let targetIndex=1;targetIndex<=3;targetIndex++){
+    const targetDistance=total*targetIndex/4;
+    let travelled=0,chosen=null;
+    for(let i=1;i<shape.length;i++){
+      travelled+=distanceBetween(shape[i-1],shape[i]);
+      if(travelled>=targetDistance){chosen=shape[i];break}
+    }
+    if(chosen&&distanceBetween(origin,chosen)>0.5&&distanceBetween(destination,chosen)>0.5)waypoints.push(chosen);
+  }
+  const params=new URLSearchParams({api:'1',origin:origin[0]+','+origin[1],destination:destination[0]+','+destination[1],travelmode:'driving'});
+  if(waypoints.length)params.set('waypoints',waypoints.map(p=>p[0]+','+p[1]).join('|'));
+  const url='https://www.google.com/maps/dir/?'+params.toString();
+  window.open(url,'_blank','noopener');
+  $('mapStatus').textContent='🗺️ Abriendo Google Maps con origen, destino y hasta 3 puntos intermedios. Google puede recalcular algunos tramos.';
+}
+function parseImportedRoute(textContent,extension){
+  const coords=[];
+  if(extension==='gpx'){
+    const xml=new DOMParser().parseFromString(textContent,'application/xml');
+    if(xml.querySelector('parsererror'))throw new Error('El archivo GPX no es válido.');
+    let points=[...xml.getElementsByTagName('trkpt')];
+    if(!points.length)points=[...xml.getElementsByTagName('rtept')];
+    if(!points.length)points=[...xml.getElementsByTagName('wpt')];
+    points.forEach(p=>{const lat=Number(p.getAttribute('lat')),lon=Number(p.getAttribute('lon'));if(Number.isFinite(lat)&&Number.isFinite(lon))coords.push([lat,lon])});
+  }else if(extension==='kml'){
+    const xml=new DOMParser().parseFromString(textContent,'application/xml');
+    if(xml.querySelector('parsererror'))throw new Error('El archivo KML no es válido.');
+    const line=xml.querySelector('LineString coordinates');
+    if(line)line.textContent.trim().split(/\s+/).forEach(pair=>{const values=pair.split(',').map(Number);if(Number.isFinite(values[0])&&Number.isFinite(values[1]))coords.push([values[1],values[0]])});
+  }else{
+    let data;try{data=JSON.parse(textContent)}catch(_){throw new Error('El archivo JSON/GeoJSON no es válido.')}
+    const lines=[];
+    const walk=g=>{if(!g)return;if(g.type==='FeatureCollection')g.features?.forEach(f=>walk(f.geometry));else if(g.type==='Feature')walk(g.geometry);else if(g.type==='LineString')lines.push(g.coordinates);else if(g.type==='MultiLineString')g.coordinates.forEach(line=>lines.push(line));};
+    walk(data);
+    if(lines.length)lines.forEach((line,index)=>line.forEach((p,i)=>{if(index===0||i>0)if(Number.isFinite(p?.[0])&&Number.isFinite(p?.[1]))coords.push([p[1],p[0]])}));
+    else if(Array.isArray(data.coordinates))data.coordinates.forEach(p=>{if(Number.isFinite(p?.[0])&&Number.isFinite(p?.[1]))coords.push([p[1],p[0]])});
+  }
+  if(coords.length<2)throw new Error('No encuentro un trazado con al menos dos puntos. Prueba con un GPX, KML o GeoJSON de una ruta.');
+  return coords;
+}
+async function importRouteFile(file){
+  if(!file)return;
+  try{
+    const extension=(file.name.split('.').pop()||'').toLowerCase();
+    if(!['gpx','kml','geojson','json'].includes(extension))throw new Error('Formato no compatible. Usa GPX, KML o GeoJSON.');
+    const shape=parseImportedRoute(await file.text(),extension);
+    clearRoute();clearManualRoute();
+    routeLine=L.polyline(shape,{weight:6,opacity:.9}).addTo(map);
+    map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+    const km=Math.round(shape.reduce((sum,p,i)=>i?sum+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:p[0],lon:p[1]}):sum,0));
+    const routeName=file.name.replace(/\.(gpx|kml|geojson|json)$/i,'').replace(/[_-]+/g,' ').trim()||'Ruta importada';
+    current={id:Date.now(),name:routeName,km:km+' km',duration:'',curves:3,stop:'none',realStop:null,realStops:[],poiError:null,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Importada',type:'Mixta',shape,routePoints:[],region:$('region').value,start:'Ruta importada',requestedKm:km,requestedDuration:0,requestedNote:'Importada desde '+file.name};
+    render(current);
+    $('mapStatus').textContent='✅ Ruta importada: '+shape.length+' puntos · '+km+' km. Puedes guardarla, compartirla o abrirla en Google Maps.';
+    $('result').scrollIntoView({behavior:'smooth'});
+  }catch(error){
+    alert('No he podido importar la ruta. '+(error?.message||'Comprueba el archivo.'));
+    $('mapStatus').textContent='⚠️ No se pudo importar el archivo de ruta.';
+  }finally{$('importRouteFile').value=''}
+}
+
 list();
 
 /* Cuenta y sincronización con Supabase. La clave publishable está diseñada para el cliente;
