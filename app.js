@@ -840,27 +840,54 @@ function closeRouteScreenshot(){
   $('routeScreenshotFile').value='';
   if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
 }
-function loadGoogleMapsLink(){
+async function loadGoogleMapsLink(){
   const raw=$('googleMapsLink').value.trim();
   if(!raw){alert('Pega primero el enlace de Google Maps.');return}
-  let decoded=raw;
-  try{decoded=decodeURIComponent(raw)}catch(_){}
-  const candidates=[];
-  const addPair=(lat,lon)=>{lat=Number(lat);lon=Number(lon);if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180&&!candidates.some(p=>Math.abs(p.lat-lat)<0.0001&&Math.abs(p.lon-lon)<0.0001))candidates.push({lat,lon})};
-  for(const m of decoded.matchAll(/@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
-  for(const m of decoded.matchAll(/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
-  for(const m of decoded.matchAll(/[?&](?:destination|origin|query|q)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
-  if(candidates.length<2){
-    alert('Este enlace no muestra suficientes coordenadas para reconstruir la ruta automáticamente. Prueba a compartir el enlace de indicaciones completo desde Google Maps; si solo tienes una captura, usa «Importar captura» y marca los puntos sobre nuestro mapa.');
+  let inputUrl;
+  try{inputUrl=new URL(raw)}catch(_){alert('El enlace no parece válido. Copia la dirección completa de Google Maps.');return}
+  const allowedHosts=['maps.app.goo.gl','goo.gl','www.google.com','google.com','maps.google.com'];
+  if(inputUrl.protocol!=='https:'||!allowedHosts.includes(inputUrl.hostname.toLowerCase())){
+    alert('Por seguridad, pega un enlace HTTPS de Google Maps.');
     return;
   }
-  clearManualRoute();clearRoute();
-  const chosen=candidates.slice(0,8);
-  chosen.forEach(p=>addManualWaypoint({lat:p.lat,lng:p.lon}));
-  finishManualRoute();
-  map.fitBounds(L.latLngBounds(chosen.map(p=>[p.lat,p.lon])),{padding:[35,35]});
-  $('mapStatus').textContent='📍 He recuperado '+chosen.length+' puntos con coordenadas del enlace. Comprueba el orden y pulsa «Generar ruta» para ajustar el recorrido a carreteras reales.';
-  $('generate').scrollIntoView({behavior:'smooth',block:'center'});
+  const button=$('loadMapsLinkButton');
+  button.disabled=true;
+  button.textContent='⏳ Leyendo enlace…';
+  $('mapStatus').textContent='Resolviendo el enlace de Google Maps y buscando los puntos del recorrido…';
+  try{
+    let decoded=decodeURIComponent(raw);
+    if(/^(maps\.app\.goo\.gl|goo\.gl)$/i.test(inputUrl.hostname)){
+      const response=await fetch('/api/resolve-google?url='+encodeURIComponent(inputUrl.href),{headers:{Accept:'application/json'}});
+      const payload=await response.json();
+      if(!response.ok||!payload.url)throw new Error(payload.error||'Google Maps no ha permitido resolver este enlace.');
+      decoded=decodeURIComponent(payload.url);
+    }
+    const candidates=[];
+    const addPair=(lat,lon)=>{lat=Number(lat);lon=Number(lon);if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180&&!candidates.some(p=>Math.abs(p.lat-lat)<0.0001&&Math.abs(p.lon-lon)<0.0001))candidates.push({lat,lon})};
+    for(const m of decoded.matchAll(/@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+    for(const m of decoded.matchAll(/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+    for(const m of decoded.matchAll(/[?&](?:destination|origin|query|q)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+    for(const m of decoded.matchAll(/(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+    if(candidates.length<2){
+      $('mapStatus').textContent='El enlace se ha abierto, pero Google Maps no ha incluido coordenadas suficientes. Prueba Compartir → Copiar enlace desde la pantalla de indicaciones, o importa un GPX.';
+      alert('He podido leer el enlace, pero no contiene suficientes coordenadas para reconstruir toda la ruta. En Google Maps, abre las indicaciones y usa Compartir → Copiar enlace. Si sigue igual, podremos añadir importación GPX.');
+      return;
+    }
+    clearManualRoute();clearRoute();
+    const chosen=candidates.slice(0,20);
+    chosen.forEach(p=>addManualWaypoint({lat:p.lat,lng:p.lon}));
+    finishManualRoute();
+    map.fitBounds(L.latLngBounds(chosen.map(p=>[p.lat,p.lon])),{padding:[35,35]});
+    $('mapStatus').textContent='📍 Recuperados '+chosen.length+' puntos del enlace. Comprueba el trazado y pulsa «Generar ruta» para ajustarlo a carreteras reales.';
+    $('generate').scrollIntoView({behavior:'smooth',block:'center'});
+  }catch(error){
+    console.error('Error importando enlace de Google Maps',error);
+    $('mapStatus').textContent='⚠️ No se pudo resolver el enlace. Puedes intentarlo de nuevo o importar un archivo GPX.';
+    alert('No he podido leer este enlace de Google Maps: '+(error?.message||'error de conexión'));
+  }finally{
+    button.disabled=false;
+    button.textContent='Intentar recuperar puntos';
+  }
 }
 function parseImportedRoute(textContent,extension){
   const coords=[];
