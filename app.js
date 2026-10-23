@@ -39,10 +39,40 @@ function showPosition(p){
     $('mapStatus').textContent='📍 Tu posición está marcada en el mapa.';
   }
 }
+function locationErrorMessage(error){
+  if(!error) return 'No se recibió una respuesta del GPS.';
+  if(error.code===1) return 'Permiso de ubicación denegado. Abre esta app desde el icono, revisa los permisos de ubicación de iOS y vuelve a intentarlo.';
+  if(error.code===2) return 'El iPhone no consigue determinar la posición. Activa Localización y prueba en un lugar con mejor señal.';
+  if(error.code===3) return 'La búsqueda de ubicación ha tardado demasiado. Pulsa «Mi ubicación» otra vez y espera unos segundos.';
+  return error.message || 'No se pudo determinar la ubicación.';
+}
 function locate(){
-  if(!navigator.geolocation){$('locStatus').textContent='❌ Geolocalización no disponible';return}
-  $('locStatus').textContent='⏳ Buscando ubicación…';
-  navigator.geolocation.getCurrentPosition(showPosition,()=>{$('locStatus').textContent='❌ No se pudo obtener la ubicación';$('mapStatus').textContent='Permite la ubicación en el navegador para situarte.'},{enableHighAccuracy:true,timeout:10000,maximumAge:30000});
+  if(!navigator.geolocation){
+    $('locStatus').textContent='❌ Este modo de apertura no ofrece geolocalización.';
+    $('mapStatus').textContent='Abre la app desde una dirección HTTPS en el navegador y comprueba los permisos de ubicación.';
+    return;
+  }
+  $('locStatus').textContent='⏳ Buscando tu ubicación…';
+  $('mapStatus').textContent='El iPhone puede tardar unos segundos en obtener el GPS.';
+  const failed=(error,secondTry=false)=>{
+    if(!secondTry && error && error.code!==1){
+      $('locStatus').textContent='⏳ El GPS tarda; probando otra forma de localizarte…';
+      navigator.geolocation.getCurrentPosition(showPosition,finalError,{
+        enableHighAccuracy:false,timeout:20000,maximumAge:120000
+      });
+      return;
+    }
+    finalError(error);
+  };
+  const finalError=(error)=>{
+    const message=locationErrorMessage(error);
+    $('locStatus').textContent='❌ '+message;
+    $('mapStatus').textContent='No se ha cambiado el punto de partida. Puedes volver a pulsar «Usar mi ubicación».';
+    console.warn('Geolocalización fallida:',{code:error?.code,message:error?.message});
+  };
+  navigator.geolocation.getCurrentPosition(showPosition,(error)=>failed(error,false),{
+    enableHighAccuracy:true,timeout:15000,maximumAge:60000
+  });
 }
 $('loc').onclick=locate;
 $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latitude,pos.longitude],14);else locate()};
