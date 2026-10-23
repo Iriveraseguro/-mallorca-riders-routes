@@ -195,12 +195,34 @@ function getRequestedKm(){return parseInt(($('km').value.match(/\d+/)||['120'])[
 
 function islandWaypoints(region,start){
   const island=ISLANDS[region], pool=island.waypoints[type]||island.waypoints.Mixta, requested=getRequestedKm();
-  const candidates=pool.map(p=>({...p,d:distanceKm(start,p)}));
-  const targetRadius=Math.max(8,Math.min(requested*0.28,Math.max(12,requested/2)));
-  candidates.sort((a,b)=>Math.abs(a.d-targetRadius)-Math.abs(b.d-targetRadius));
-  const first=candidates[0];
-  const second=candidates.filter(p=>p.name!==first.name).sort((a,b)=>Math.abs(a.d-targetRadius*1.35)-Math.abs(b.d-targetRadius*1.35))[0];
-  return [first,second].filter(Boolean);
+  const candidates=pool.map(p=>{
+    const d=distanceKm(start,p);
+    const y=Math.sin((p.lon-start.lon)*Math.PI/180)*Math.cos(p.lat*Math.PI/180);
+    const x=Math.cos(start.lat*Math.PI/180)*Math.sin(p.lat*Math.PI/180)-Math.sin(start.lat*Math.PI/180)*Math.cos(p.lat*Math.PI/180)*Math.cos((p.lon-start.lon)*Math.PI/180);
+    return {...p,d,bearing:(Math.atan2(y,x)*180/Math.PI+360)%360};
+  }).filter(p=>p.d>5);
+  if(candidates.length<3){
+    return candidates.sort((a,b)=>a.d-b.d).slice(0,2);
+  }
+  // Una ruta circular necesita puntos repartidos alrededor del origen,
+  // no simplemente los dos lugares que estén a una distancia parecida.
+  const targetRadius=Math.max(10,Math.min(requested*0.20,35));
+  const combos=[];
+  for(let i=0;i<candidates.length;i++){
+    for(let j=i+1;j<candidates.length;j++){
+      for(let k=j+1;k<candidates.length;k++){
+        const trio=[candidates[i],candidates[j],candidates[k]];
+        const bearings=trio.map(p=>p.bearing).sort((a,b)=>a-b);
+        const gaps=[bearings[1]-bearings[0],bearings[2]-bearings[1],360-bearings[2]+bearings[0]];
+        const radialError=trio.reduce((sum,p)=>sum+Math.abs(p.d-targetRadius),0)/3;
+        const spreadPenalty=gaps.reduce((sum,g)=>sum+Math.abs(g-120),0)/120;
+        const separationPenalty=trio.reduce((sum,p,idx)=>sum+(idx?Math.max(0,8-distanceKm(p,trio[idx-1])):0),0);
+        combos.push({trio,score:radialError+spreadPenalty*8+separationPenalty});
+      }
+    }
+  }
+  combos.sort((a,b)=>a.score-b.score);
+  return combos[0]?.trio||candidates.sort((a,b)=>Math.abs(a.d-targetRadius)-Math.abs(b.d-targetRadius)).slice(0,3);
 }
 
 function distanceKm(a,b){
@@ -299,13 +321,25 @@ function buildRouteCandidates(plan){
   };
   add(plan.targets,'base');
   const island=ISLANDS[plan.region];
-  if(island){
+  if(island&&!plan.manual){
     const pool=(island.waypoints[plan.type]||island.waypoints.Mixta).filter(p=>distanceKm(plan.start,p)>5);
-    const scored=pool.map(p=>({...p,d:distanceKm(plan.start,p)})).sort((a,b)=>Math.abs(a.d-plan.requestedKm*0.22)-Math.abs(b.d-plan.requestedKm*0.22));
-    for(let i=0;i<scored.length&&candidates.length<3;i++)for(let j=i+1;j<scored.length&&candidates.length<3;j++){
-      const a=scored[i],b=scored[j];if(distanceKm(a,b)<4)continue;
-      add([a,b].sort((x,y)=>x.d-y.d),`waypoints-${i}-${j}`);
+    const targetRadius=Math.max(10,Math.min(plan.requestedKm*0.20,35));
+    const bearingOf=p=>{
+      const y=Math.sin((p.lon-plan.start.lon)*Math.PI/180)*Math.cos(p.lat*Math.PI/180);
+      const x=Math.cos(plan.start.lat*Math.PI/180)*Math.sin(p.lat*Math.PI/180)-Math.sin(plan.start.lat*Math.PI/180)*Math.cos(p.lat*Math.PI/180)*Math.cos((p.lon-plan.start.lon)*Math.PI/180);
+      return (Math.atan2(y,x)*180/Math.PI+360)%360;
+    };
+    const combos=[];
+    for(let i=0;i<pool.length;i++)for(let j=i+1;j<pool.length;j++)for(let k=j+1;k<pool.length;k++){
+      const trio=[pool[i],pool[j],pool[k]];
+      const bearings=trio.map(bearingOf).sort((a,b)=>a-b);
+      const gaps=[bearings[1]-bearings[0],bearings[2]-bearings[1],360-bearings[2]+bearings[0]];
+      const radialError=trio.reduce((sum,p)=>sum+Math.abs(distanceKm(plan.start,p)-targetRadius),0)/3;
+      const spreadPenalty=gaps.reduce((sum,g)=>sum+Math.abs(g-120),0)/120;
+      combos.push({trio,score:radialError+spreadPenalty*8});
     }
+    combos.sort((a,b)=>a.score-b.score);
+    combos.slice(0,3).forEach((combo,index)=>add(combo.trio,`circular-${index+1}`));
   }
   return candidates.slice(0,3);
 }
