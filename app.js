@@ -80,7 +80,7 @@ $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latit
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
 const APP_VERSION='v5.3';
-const VALHALLA_URL='https://misty-disk-3dfe.i-riveraseguro.workers.dev';
+const VALHALLA_URL='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev';
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
 function destinationPoint(lat,lon,distanceKm,bearingDeg){
@@ -464,7 +464,7 @@ async function findRealStops(coords,stop){
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:8];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://misty-disk-3dfe.i-riveraseguro.workers.dev/overpass';
+    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
     let data=null;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
     try{
