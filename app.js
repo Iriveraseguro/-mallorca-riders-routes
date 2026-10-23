@@ -291,6 +291,12 @@ function initApp(){
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('importRouteButton').onclick=()=>$('importRouteFile').click();
   $('importRouteFile').onchange=e=>importRouteFile(e.target.files?.[0]);
+  $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
+  $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
+  $('closeScreenshot').onclick=closeRouteScreenshot;
+  $('traceScreenshotButton').onclick=()=>{startManualRoute();$('mapStatus').textContent='👆 Mira la captura y toca en el mapa los puntos del recorrido en orden. Coloca varios puntos en las curvas importantes y pulsa «Terminar puntos».';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
+  $('loadMapsLinkButton').onclick=loadGoogleMapsLink;
+
   $('refreshApp').onclick=refreshApplication;
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
@@ -817,6 +823,44 @@ function maps(){
   const url='https://www.google.com/maps/dir/?'+params.toString();
   window.open(url,'_blank','noopener');
   $('mapStatus').textContent='🗺️ Abriendo Google Maps con origen, destino y hasta 3 puntos intermedios. Google puede recalcular algunos tramos.';
+}
+let screenshotObjectUrl=null;
+function showRouteScreenshot(file){
+  if(!file)return;
+  if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
+  if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
+  screenshotObjectUrl=URL.createObjectURL(file);
+  $('routeScreenshotPreview').src=screenshotObjectUrl;
+  $('routeScreenshotName').textContent=file.name;
+  $('routeScreenshotPanel').classList.remove('hidden');
+  $('mapStatus').textContent='📸 Captura cargada. Para reconstruir la ruta, marca manualmente varios puntos sobre el mapa siguiendo la imagen.';
+}
+function closeRouteScreenshot(){
+  $('routeScreenshotPanel').classList.add('hidden');
+  $('routeScreenshotFile').value='';
+  if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
+}
+function loadGoogleMapsLink(){
+  const raw=$('googleMapsLink').value.trim();
+  if(!raw){alert('Pega primero el enlace de Google Maps.');return}
+  let decoded=raw;
+  try{decoded=decodeURIComponent(raw)}catch(_){}
+  const candidates=[];
+  const addPair=(lat,lon)=>{lat=Number(lat);lon=Number(lon);if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180&&!candidates.some(p=>Math.abs(p.lat-lat)<0.0001&&Math.abs(p.lon-lon)<0.0001))candidates.push({lat,lon})};
+  for(const m of decoded.matchAll(/@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+  for(const m of decoded.matchAll(/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+  for(const m of decoded.matchAll(/[?&](?:destination|origin|query|q)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/g))addPair(m[1],m[2]);
+  if(candidates.length<2){
+    alert('Este enlace no muestra suficientes coordenadas para reconstruir la ruta automáticamente. Prueba a compartir el enlace de indicaciones completo desde Google Maps; si solo tienes una captura, usa «Importar captura» y marca los puntos sobre nuestro mapa.');
+    return;
+  }
+  clearManualRoute();clearRoute();
+  const chosen=candidates.slice(0,8);
+  chosen.forEach(p=>addManualWaypoint({lat:p.lat,lng:p.lon}));
+  finishManualRoute();
+  map.fitBounds(L.latLngBounds(chosen.map(p=>[p.lat,p.lon])),{padding:[35,35]});
+  $('mapStatus').textContent='📍 He recuperado '+chosen.length+' puntos con coordenadas del enlace. Comprueba el orden y pulsa «Generar ruta» para ajustar el recorrido a carreteras reales.';
+  $('generate').scrollIntoView({behavior:'smooth',block:'center'});
 }
 function parseImportedRoute(textContent,extension){
   const coords=[];
