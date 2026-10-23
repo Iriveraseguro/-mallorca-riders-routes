@@ -289,7 +289,8 @@ function initApp(){
   $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
-  $('importRouteButton').onclick=()=>$('importRouteFile').click();
+  $('importRouteButton').onclick=()=>{const panel=$('importRoutePanel');panel.classList.toggle('hidden');if(!panel.classList.contains('hidden')){panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink').focus({preventScroll:true})}};
+  $('chooseRouteFileButton').onclick=()=>$('importRouteFile').click();
   $('importRouteFile').onchange=e=>importRouteFile(e.target.files?.[0]);
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
