@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mallorca-riders-routes",
+  "compatibility_date": "2026-10-23",
+  "assets": {
+    "directory": "."
+  },
+  "previews": {}
+}
