@@ -28,6 +28,7 @@ function showPosition(p){
   const icon=L.divIcon({className:'',html:'<div class="user-dot"></div>',iconSize:[18,18],iconAnchor:[9,9]});
   userMarker=L.marker(latlng,{icon}).addTo(map).bindPopup('📍 Tu posición');
   userAccuracy=L.circle(latlng,{radius:p.coords.accuracy,color:'#1683ff',weight:1,fillOpacity:.08}).addTo(map);
+  map.setView(latlng,13);
   const detected=detectIsland(pos);
   if(detected){
     $('region').value=detected;
