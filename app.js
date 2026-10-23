@@ -211,7 +211,7 @@ function islandWaypoints(region,start){
   for(let i=0;i<candidates.length;i++){
     for(let j=i+1;j<candidates.length;j++){
       for(let k=j+1;k<candidates.length;k++){
-        const trio=[candidates[i],candidates[j],candidates[k]];
+        const trio=[candidates[i],candidates[j],candidates[k]].sort((a,b)=>a.bearing-b.bearing);
         const bearings=trio.map(p=>p.bearing).sort((a,b)=>a-b);
         const gaps=[bearings[1]-bearings[0],bearings[2]-bearings[1],360-bearings[2]+bearings[0]];
         const radialError=trio.reduce((sum,p)=>sum+Math.abs(p.d-targetRadius),0)/3;
@@ -331,7 +331,7 @@ function buildRouteCandidates(plan){
     };
     const combos=[];
     for(let i=0;i<pool.length;i++)for(let j=i+1;j<pool.length;j++)for(let k=j+1;k<pool.length;k++){
-      const trio=[pool[i],pool[j],pool[k]];
+      const trio=[pool[i],pool[j],pool[k]].sort((a,b)=>bearingOf(a)-bearingOf(b));
       const bearings=trio.map(bearingOf).sort((a,b)=>a-b);
       const gaps=[bearings[1]-bearings[0],bearings[2]-bearings[1],360-bearings[2]+bearings[0]];
       const radialError=trio.reduce((sum,p)=>sum+Math.abs(distanceKm(plan.start,p)-targetRadius),0)/3;
@@ -343,10 +343,47 @@ function buildRouteCandidates(plan){
   }
   return candidates.slice(0,3);
 }
+function routeOverlapPenalty(coords){
+  if(!Array.isArray(coords)||coords.length<30)return 0;
+  // Muestreamos la geometría y comparamos puntos separados por al menos 2,5 km
+  // de recorrido. Si vuelven a pasar cerca, probablemente se está repitiendo carretera.
+  const stride=Math.max(1,Math.ceil(coords.length/220));
+  const samples=[];
+  let travelled=0,last=null;
+  for(let i=0;i<coords.length;i+=stride){
+    const p=coords[i];
+    if(!Array.isArray(p)||!Number.isFinite(p[0])||!Number.isFinite(p[1]))continue;
+    if(last)travelled+=distanceKm({lat:last[0],lon:last[1]},{lat:p[0],lon:p[1]});
+    samples.push({lat:p[0],lon:p[1],along:travelled,overlap:false});
+    last=p;
+  }
+  if(samples.length<12)return 0;
+  // Cierra el cálculo incluyendo el último punto.
+  const end=coords[coords.length-1];
+  const lastSample=samples[samples.length-1];
+  if(end&&Number.isFinite(end[0])&&Number.isFinite(end[1])&&
+     (lastSample.lat!==end[0]||lastSample.lon!==end[1])){
+    travelled+=distanceKm({lat:lastSample.lat,lon:lastSample.lon},{lat:end[0],lon:end[1]});
+    samples.push({lat:end[0],lon:end[1],along:travelled,overlap:false});
+  }
+  let duplicate=0;
+  for(let i=0;i<samples.length;i++){
+    for(let j=i+1;j<samples.length;j++){
+      const alongGap=samples[j].along-samples[i].along;
+      if(alongGap<2.5)continue;
+      if(distanceKm(samples[i],samples[j])<0.18){
+        if(!samples[i].overlap){samples[i].overlap=true;duplicate++;}
+        if(!samples[j].overlap){samples[j].overlap=true;duplicate++;}
+      }
+    }
+  }
+  return duplicate/Math.max(samples.length,1);
+}
 function routeScore(result,plan){
   const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
-  return kmError*0.78+timeError*0.22;
+  const overlapPenalty=$('circle').checked?routeOverlapPenalty(result.coords)*1.25:0;
+  return kmError*0.78+timeError*0.22+overlapPenalty;
 }
 
 function decodePolyline6(str){
