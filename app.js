@@ -338,7 +338,7 @@ function initApp(){
   $('closeScreenshot').onclick=closeRouteScreenshot;
   $('alignScreenshotButton').onclick=beginScreenshotAlignment;
   $('traceScreenshotButton').onclick=()=>{if(!screenshotOverlay){$('mapStatus').textContent='Primero pulsa «Alinear captura con mapa» y sigue los pasos.';return}startManualRoute();$('mapStatus').textContent='👆 Toca sobre la línea de la captura, en el mapa, para marcar los puntos del recorrido en orden. Después pulsa «Terminar puntos».';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
-  $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100};
+  $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100)};
   $('screenshotImportAlternatives').onclick=()=>{
     const panel=$('importRoutePanel');
     if(panel){panel.classList.remove('hidden');panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink')?.focus({preventScroll:true});}
