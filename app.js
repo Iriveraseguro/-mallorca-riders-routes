@@ -672,6 +672,12 @@ async function requestRoute(locations,plan){
   return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration}};
 }
 async function generateRoute(){
+  if(screenshotReferenceActive&&!manualRouteActive){
+    $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Para no dibujar una ruta en otra zona, importa un enlace/archivo de ruta o pulsa «Marcar puntos manualmente» y coloca al menos 2 puntos sobre el mapa.';
+    $('routeTraceStatus').textContent='La línea azul se ha detectado visualmente, pero aún no está geolocalizada. Usa un enlace/GPX o coloca puntos en el mapa para generar una ruta fiable.';
+    $('map').scrollIntoView({behavior:'smooth',block:'center'});
+    return;
+  }
   const plan=routePlan();if(!plan)return;
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';
   $('mapStatus').textContent='🧭 Comparando alternativas para acercarnos a los km y duración elegidos…';clearRoute();
@@ -877,10 +883,12 @@ function maps(){
   window.open(url,'_blank','noopener');
   $('mapStatus').textContent='🗺️ Abriendo Google Maps con origen, destino y hasta 3 puntos intermedios. Google puede recalcular algunos tramos.';
 }
-let screenshotObjectUrl=null;
+let screenshotObjectUrl=null,screenshotReferenceActive=false;
 async function showRouteScreenshot(file){
   if(!file)return;
   if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
+  // Desde que se elige una captura, bloquear la generación normal hasta cerrar
+  // el panel o elegir puntos geográficos reales; incluso si falla la detección.
   if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
   screenshotObjectUrl=URL.createObjectURL(file);
   $('routeScreenshotPreview').src=screenshotObjectUrl;
@@ -898,26 +906,45 @@ async function showRouteScreenshot(file){
     const ctx=canvas.getContext('2d',{willReadFrequently:true});
     ctx.drawImage(img,0,0,w,h);
     const frame=ctx.getImageData(0,0,w,h),d=frame.data;
-    let hits=0,minX=w,minY=h,maxX=0,maxY=0;
-    // Detect the characteristic blue/cyan route stroke used by common map styles.
-    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-      const i=(y*w+x)*4,r=d[i],g=d[i+1],b=d[i+2];
-      const isBlue=b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100;
-      if(isBlue){hits++;if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}
+    const totalPixels=w*h,blue=new Uint8Array(totalPixels),visited=new Uint8Array(totalPixels);
+    // Primero aislamos píxeles azulados y después buscamos grupos conectados.
+    // Así evitamos resaltar todos los iconos azules dispersos del mapa.
+    let blueHits=0;
+    for(let p=0;p<totalPixels;p++){
+      const i=p*4,r=d[i],g=d[i+1],b=d[i+2];
+      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){blue[p]=1;blueHits++}
     }
-    if(hits<Math.max(45,w*h*0.00008)){
-      status.textContent='No he podido aislar una línea azul con suficiente confianza. Puede que la ruta sea de otro color o que la captura no muestre el trazado con claridad.';
-      $('mapStatus').textContent='⚠️ No se ha detectado una línea azul fiable. No se ha creado ninguna ruta.';
+    const stack=new Int32Array(totalPixels);
+    let components=[],largest=0;
+    for(let p=0;p<totalPixels;p++){
+      if(!blue[p]||visited[p])continue;
+      let top=0;stack[top++]=p;visited[p]=1;
+      const pixels=[];let minX=w,minY=h,maxX=0,maxY=0;
+      while(top){
+        const q=stack[--top],x=q%w,y=(q/w)|0;
+        pixels.push(q);if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;
+        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+          if(!dx&&!dy)continue;
+          const nx=x+dx,ny=y+dy;if(nx<0||nx>=w||ny<0||ny>=h)continue;
+          const n=ny*w+nx;if(blue[n]&&!visited[n]){visited[n]=1;stack[top++]=n}
+        }
+      }
+      if(pixels.length>largest)largest=pixels.length;
+      components.push({pixels,size:pixels.length,minX,minY,maxX,maxY});
+    }
+    if(blueHits<Math.max(45,totalPixels*0.00008)||!components.length){
+      status.textContent='No he podido detectar un trazado azul suficientemente claro. No se ha creado ninguna ruta.';
+      $('mapStatus').textContent='⚠️ No se ha detectado una línea azul fiable.';
       return;
     }
-    // Overlay only the pixels that match the likely route colour.
-    const original=ctx.getImageData(0,0,w,h),src=original.data,mask=ctx.createImageData(w,h),md=mask.data;
-    for(let i=0;i<src.length;i+=4){
-      const r=src[i],g=src[i+1],b=src[i+2];
-      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&src[i+3]>100){
-        md[i]=255;md[i+1]=30;md[i+2]=190;md[i+3]=220;
-      }
-    }
+    // Conservamos el componente principal y solo segmentos grandes relacionados
+    // por tamaño; los iconos aislados y pequeños quedan fuera.
+    const keep=components.filter(c=>c.size>=Math.max(8,largest*0.10)).sort((a,b)=>b.size-a.size).slice(0,18);
+    const selected=new Uint8Array(totalPixels);let hits=0,minX=w,minY=h,maxX=0,maxY=0;
+    for(const c of keep)for(const q of c.pixels){selected[q]=1;hits++;const x=q%w,y=(q/w)|0;if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y}
+    if(!hits){status.textContent='No he podido separar la línea principal del mapa.';return}
+    const mask=ctx.createImageData(w,h),md=mask.data;
+    for(let p=0;p<totalPixels;p++)if(selected[p]){const i=p*4;md[i]=255;md[i+1]=30;md[i+2]=190;md[i+3]=220}
     canvas.style.backgroundImage='url("'+screenshotObjectUrl+'")';
     canvas.style.backgroundSize='100% 100%';
     canvas.style.backgroundRepeat='no-repeat';
@@ -925,14 +952,16 @@ async function showRouteScreenshot(file){
     ctx.clearRect(0,0,w,h);
     ctx.putImageData(mask,0,0);
     canvas.classList.remove('hidden');canvas.style.display='block';
-    status.textContent='He detectado '+hits.toLocaleString('es-ES')+' píxeles del posible trazado azul y lo he resaltado en magenta. Esto confirma la línea visual, pero todavía no demuestra dónde está en el mapa: no convertiré esos píxeles en coordenadas GPS sin referencias geográficas fiables.';
-    $('mapStatus').textContent='🧭 Trazo visual detectado. El siguiente paso es asociarlo a carreteras reales usando referencias geográficas de la captura; no se ha dibujado aún una ruta GPS.';
+    screenshotReferenceActive=true;
+    status.textContent='He aislado '+hits.toLocaleString('es-ES')+' píxeles conectados del posible trazado azul y los he resaltado en magenta. Esto aún no identifica su ubicación GPS.';
+    $('mapStatus').textContent='🧭 Captura analizada. Para evitar una ruta en otra zona, no se usará esta imagen como si contuviera coordenadas GPS. Importa un enlace/GPX o coloca puntos sobre el mapa.';
   }catch(err){
     status.textContent='No se pudo analizar la imagen: '+(err.message||'error desconocido');
     $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
   }
 }
 function closeRouteScreenshot(){
+  screenshotReferenceActive=false;
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
   if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
