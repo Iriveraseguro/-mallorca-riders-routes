@@ -296,7 +296,7 @@ function updateRegionUI(){
     $('mapStatus').textContent=`${region==='mallorca'?'🏝️':'🏝️'} Ruta solo por ${island.name}.`;
   }
 }
-async function refreshApplication(){
+async async function refreshApplication(){
   const button=$('refreshApp');
   if(button){button.disabled=true;button.textContent='⏳ Comprobando…'}
   try{
