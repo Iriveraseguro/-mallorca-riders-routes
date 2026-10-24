@@ -2,6 +2,35 @@ const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","googl
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/overpass") {
+      const headers = {"Cache-Control":"no-store"};
+      if (request.method !== "POST") return Response.json({error:"Método no permitido."},{status:405,headers});
+      const contentType = request.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("text/plain")) return Response.json({error:"La consulta debe enviarse como texto."},{status:415,headers});
+      let query = "";
+      try { query = await request.text(); } catch { return Response.json({error:"No se pudo leer la consulta."},{status:400,headers}); }
+      if (!query || query.length > 30000 || !query.includes("[out:json]") || !query.includes(");out center tags;")) {
+        return Response.json({error:"Consulta Overpass vacía, demasiado grande o no válida."},{status:400,headers});
+      }
+      try {
+        const response = await fetch("https://overpass-api.de/api/interpreter", {
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},
+          body:"data="+encodeURIComponent(query),
+          signal:AbortSignal.timeout(14000)
+        });
+        const body = await response.text();
+        if (!response.ok) {
+          return Response.json({error:"El servicio de mapas respondió HTTP "+response.status,detail:body.slice(0,500)}, {status:response.status===429?429:502,headers});
+        }
+        let parsed;
+        try { parsed=JSON.parse(body); } catch { return Response.json({error:"El servicio de mapas devolvió una respuesta no válida."},{status:502,headers}); }
+        if (!Array.isArray(parsed.elements)) return Response.json({error:"La respuesta de mapas no contiene establecimientos."},{status:502,headers});
+        return Response.json(parsed,{headers});
+      } catch (error) {
+        return Response.json({error:"No se pudo conectar con el servicio de mapas.",detail:String(error?.message||error).slice(0,250)},{status:502,headers});
+      }
+    }
     if (url.pathname === "/api/resolve-google") {
       const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
       if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
