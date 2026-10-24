@@ -91,6 +91,40 @@ function destinationPoint(lat,lon,distanceKm,bearingDeg){
   return {lat:p2*180/Math.PI,lon:((l2*180/Math.PI+540)%360)-180};
 }
 function clearRoute(){if(!map) return; if(routeLine){map.removeLayer(routeLine);routeLine=null}routeMarkers.forEach(m=>map.removeLayer(m));routeMarkers=[]}
+
+// Añade flechas en el sentido real del recorrido. Se usan coordenadas consecutivas
+// de la geometría, por lo que funcionan igual en rutas generadas, importadas y compartidas.
+function addDirectionalArrows(coords){
+  if(!map||!Array.isArray(coords)||coords.length<3)return;
+  let total=0,segments=[];
+  for(let i=1;i<coords.length;i++){
+    const a=coords[i-1],b=coords[i];
+    const length=distanceKm({lat:a[0],lon:a[1]},{lat:b[0],lon:b[1]});
+    if(!Number.isFinite(length)||length<=0)continue;
+    segments.push({a,b,length,start:total,end:total+length});
+    total+=length;
+  }
+  if(!segments.length||total<1)return;
+  const spacing=total<18?Math.max(5,total/3):Math.max(7,Math.min(14,total/8));
+  for(let target=spacing/2;target<total-spacing/4;target+=spacing){
+    const seg=segments.find(s=>target>=s.start&&target<=s.end);
+    if(!seg)continue;
+    const fraction=(target-seg.start)/seg.length;
+    const lat=seg.a[0]+(seg.b[0]-seg.a[0])*fraction;
+    const lon=seg.a[1]+(seg.b[1]-seg.a[1])*fraction;
+    const pa=map.latLngToLayerPoint([seg.a[0],seg.a[1]]);
+    const pb=map.latLngToLayerPoint([seg.b[0],seg.b[1]]);
+    const angle=Math.atan2(pb.y-pa.y,pb.x-pa.x)*180/Math.PI;
+    const icon=L.divIcon({
+      className:'route-direction-icon',
+      html:'<span class="route-direction-arrow" style="transform:rotate('+angle.toFixed(1)+'deg)">➤</span>',
+      iconSize:[24,24],
+      iconAnchor:[12,12]
+    });
+    const marker=L.marker([lat,lon],{icon,interactive:false,keyboard:false,zIndexOffset:500}).addTo(map);
+    routeMarkers.push(marker);
+  }
+}
 function refreshManualPointLabels(){
   manualWaypoints.forEach((point,index)=>{
     point.name='Punto '+(index+1);
@@ -651,7 +685,7 @@ async function generateRoute(){
     valid.sort((a,b)=>a.score-b.score);
     const {result,candidate:chosen}=valid[0];
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
-    routeLine=L.polyline(result.coords,{weight:6,opacity:.9}).addTo(map);
+    routeLine=L.polyline(result.coords,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(result.coords);
     if(!plan.manual){
       chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
     }
@@ -793,7 +827,7 @@ function loadSharedRoute(){
       requestedNote:'Ruta compartida por un motero'
     };
     clearRoute();
-    routeLine=L.polyline(shape,{weight:6,opacity:.9}).addTo(map);
+    routeLine=L.polyline(shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(shape);
     routePoints.forEach((p,i)=>{
       const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
       routeMarkers.push(marker);
