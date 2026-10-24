@@ -285,11 +285,17 @@ async function refreshApplication(){
   window.location.reload();
 }
 function initApp(){
-  if(!initMap()){ $('mapStatus').textContent='⚠️ No se pudo cargar el mapa. Recarga la página.'; return; }
-  $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
-  $('finishManual').onclick=finishManualRoute;
-  $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
-  $('importRouteButton').onclick=()=>{const panel=$('importRoutePanel');panel.classList.toggle('hidden');if(!panel.classList.contains('hidden')){panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink').focus({preventScroll:true})}};
+  // Conectar la importación antes de inicializar el mapa, para que el botón
+  // no quede inactivo si falla la carga de Leaflet.
+  $('importRouteButton').onclick=()=>{
+    const panel=$('importRoutePanel');
+    if(!panel){$('mapStatus').textContent='No se encontró el panel de importación.';return;}
+    panel.classList.toggle('hidden');
+    if(!panel.classList.contains('hidden')){
+      panel.scrollIntoView({behavior:'smooth',block:'center'});
+      $('googleMapsLink')?.focus({preventScroll:true});
+    }
+  };
   $('chooseRouteFileButton').onclick=()=>$('importRouteFile').click();
   $('importRouteFile').onchange=e=>importRouteFile(e.target.files?.[0]);
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
@@ -298,6 +304,13 @@ function initApp(){
   $('traceScreenshotButton').onclick=()=>{startManualRoute();$('mapStatus').textContent='👆 Mira la captura y toca en el mapa los puntos del recorrido en orden. Coloca varios puntos en las curvas importantes y pulsa «Terminar puntos».';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
   $('loadMapsLinkButton').onclick=loadGoogleMapsLink;
 
+  if(!initMap()){
+    $('mapStatus').textContent='⚠️ El mapa no se ha podido inicializar. La importación se muestra, pero para dibujar la ruta hay que recargar la app.';
+    return;
+  }
+  $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
+  $('finishManual').onclick=finishManualRoute;
+  $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('refreshApp').onclick=refreshApplication;
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
