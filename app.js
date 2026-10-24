@@ -887,6 +887,8 @@ let screenshotObjectUrl=null,screenshotReferenceActive=false;
 async function showRouteScreenshot(file){
   if(!file)return;
   if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
+  // Desde que se elige una captura, bloquear la generación normal hasta cerrar
+  // el panel o elegir puntos geográficos reales; incluso si falla la detección.
   if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
   screenshotObjectUrl=URL.createObjectURL(file);
   $('routeScreenshotPreview').src=screenshotObjectUrl;
