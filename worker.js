@@ -20,6 +20,45 @@ export default {
         return Response.json({url:final.href},{headers:{...headers,"Cache-Control":"no-store"}});
       }catch{return Response.json({error:"No se pudo resolver el enlace corto. Inténtalo con el enlace completo de indicaciones."},{status:502,headers})}
     }
+    if (url.pathname === "/api/route") {
+      const origin = request.headers.get("Origin");
+      if (origin && origin !== url.origin) {
+        return Response.json({ error: "Origen no permitido." }, { status: 403 });
+      }
+      const headers = {
+        "Access-Control-Allow-Origin": url.origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Accept",
+        "Cache-Control": "no-store",
+        "Vary": "Origin"
+      };
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers });
+      }
+      if (request.method !== "POST") {
+        return Response.json({ error: "Método no permitido." }, { status: 405, headers });
+      }
+      try {
+        const body = await request.text();
+        const upstream = await fetch("https://valhalla1.openstreetmap.de/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body
+        });
+        return new Response(upstream.body, {
+          status: upstream.status,
+          headers: {
+            ...headers,
+            "Content-Type": upstream.headers.get("Content-Type") || "application/json"
+          }
+        });
+      } catch (error) {
+        return Response.json(
+          { error: "No se pudo conectar con el motor de rutas.", detail: String(error?.message || error) },
+          { status: 502, headers }
+        );
+      }
+    }
     return env.ASSETS.fetch(request);
   }
 };
