@@ -994,6 +994,7 @@ function handleScreenshotImageClick(event){
     return;
   }
   screenshotCalibrationStage='map';screenshotCalibrationZoom=map.getZoom();
+  $('routeScreenshotPanel').classList.add('hidden');
   $('routeTraceStatus').textContent='PASO 2/2: ahora toca en el mapa real el mismo primer punto (el de arriba/izquierda). Después toca el segundo punto correspondiente.';
   $('mapStatus').textContent='🗺️ Toca en el mapa la ubicación real que corresponde al primer punto de la captura.';
   $('map').scrollIntoView({behavior:'smooth',block:'center'});
@@ -1014,6 +1015,7 @@ function handleScreenshotMapClick(latlng){
   const sx=(pb.x-pa.x)/dx,sy=(pb.y-pa.y)/dy;
   if(!Number.isFinite(sx)||!Number.isFinite(sy)||sx<=0||sy<=0||Math.abs(sx)<1||Math.abs(sy)<1){
     screenshotCalibrationStage='image';screenshotImagePoints=[];screenshotMapPoints=[];
+    $('routeScreenshotPanel').classList.remove('hidden');
     $('routeTraceStatus').textContent='No he podido alinear esos puntos. Pulsa «Alinear captura con mapa» y elige referencias más separadas.';
     $('mapStatus').textContent='⚠️ Los puntos no forman una alineación válida. Inténtalo con dos cruces bien separados.';
     return;
@@ -1025,6 +1027,7 @@ function handleScreenshotMapClick(latlng){
   screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:false}).addTo(map);
   screenshotCalibrationStage=null;
   $('routeScreenshotPreview').style.cursor='';$('routeScreenshotPreview').onclick=null;
+  $('routeScreenshotPanel').classList.remove('hidden');
   map.fitBounds(bounds,{padding:[20,20]});
   $('routeTraceStatus').textContent='✅ Captura colocada sobre el mapa. Ajusta la transparencia para ver las carreteras y después pulsa «Trazar ruta sobre el mapa». La alineación depende de los dos puntos elegidos.';
   $('mapStatus').textContent='✅ Captura alineada. Ahora puedes marcar los puntos siguiendo la línea de la ruta.';
