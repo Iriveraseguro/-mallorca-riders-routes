@@ -522,22 +522,37 @@ function routeShapeIsInRegion(coords,region,geometry){
   return false;
 }
 function poiQueryForStop(stop){
-  if(stop==='all')return [
-    'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
-  ];
-  if(stop.includes('Restaurante'))return [
-    'node["amenity"~"^(restaurant|fast_food)$"]',
-    'way["amenity"~"^(restaurant|fast_food)$"]'
-  ];
-  if(stop.includes('Café')||stop.includes('Bar'))return [
-    'node["amenity"~"^(cafe|bar|pub)$"]',
-    'way["amenity"~"^(cafe|bar|pub)$"]'
-  ];
-  if(stop.includes('Gasolinera'))return [
-    'node["amenity"="fuel"]',
-    'way["amenity"="fuel"]'
-  ];
+  const queries={
+    all:[
+      'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+      'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+      'node["tourism"="viewpoint"]',
+      'way["tourism"="viewpoint"]',
+      'relation["tourism"="viewpoint"]'
+    ],
+    restaurant:[
+      'node["amenity"~"^(restaurant|fast_food)$"]',
+      'way["amenity"~"^(restaurant|fast_food)$"]'
+    ],
+    cafe:[
+      'node["amenity"~"^(cafe|bar|pub)$"]',
+      'way["amenity"~"^(cafe|bar|pub)$"]'
+    ],
+    fuel:[
+      'node["amenity"="fuel"]',
+      'way["amenity"="fuel"]'
+    ],
+    viewpoint:[
+      'node["tourism"="viewpoint"]',
+      'way["tourism"="viewpoint"]',
+      'relation["tourism"="viewpoint"]'
+    ]
+  };
+  if(stop==='all')return queries.all;
+  if(stop.includes('Mirador'))return queries.viewpoint;
+  if(stop.includes('Restaurante'))return queries.restaurant;
+  if(stop.includes('Café')||stop.includes('Bar'))return queries.cafe;
+  if(stop.includes('Gasolinera'))return queries.fuel;
   return [];
 }
 
