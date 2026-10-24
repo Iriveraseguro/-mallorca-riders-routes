@@ -910,29 +910,20 @@ async function showRouteScreenshot(file){
       $('mapStatus').textContent='⚠️ No se ha detectado una línea azul fiable. No se ha creado ninguna ruta.';
       return;
     }
-    // Keep the original map visible and mark likely route-colour pixels in magenta.
-    const original=ctx.getImageData(0,0,w,h);
-    for(let i=0;i<d.length;i+=4){
-      const r=d[i],g=d[i+1],b=d[i+2];
-      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){
-        d[i]=255;d[i+1]=30;d[i+2]=190;d[i+3]=235;
-      }else d[i+3]=0;
+    // Overlay only the pixels that match the likely route colour.
+    const original=ctx.getImageData(0,0,w,h),src=original.data,mask=ctx.createImageData(w,h),md=mask.data;
+    for(let i=0;i<src.length;i+=4){
+      const r=src[i],g=src[i+1],b=src[i+2];
+      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&src[i+3]>100){
+        md[i]=255;md[i+1]=30;md[i+2]=190;md[i+3]=220;
+      }
     }
-    ctx.putImageData(original,0,0);
-    // Render a transparent overlay so the detected route pixels are easy to inspect.
-    const overlay=document.createElement('canvas');overlay.width=w;overlay.height=h;
-    const ox=overlay.getContext('2d');const mask=ox.createImageData(w,h);
-    for(let i=0;i<d.length;i+=4){
-      const r=d[i],g=d[i+1],b=d[i+2];
-      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){mask.data[i]=255;mask.data[i+1]=30;mask.data[i+2]=190;mask.data[i+3]=220;}
-    }
-    ox.putImageData(mask,0,0);
     canvas.style.backgroundImage='url("'+screenshotObjectUrl+'")';
     canvas.style.backgroundSize='100% 100%';
     canvas.style.backgroundRepeat='no-repeat';
     canvas.style.backgroundColor='transparent';
-    canvas.getContext('2d').clearRect(0,0,w,h);
-    canvas.getContext('2d').drawImage(overlay,0,0);
+    ctx.clearRect(0,0,w,h);
+    ctx.putImageData(mask,0,0);
     canvas.classList.remove('hidden');canvas.style.display='block';
     status.textContent='He detectado '+hits.toLocaleString('es-ES')+' píxeles del posible trazado azul y lo he resaltado en magenta. Esto confirma la línea visual, pero todavía no demuestra dónde está en el mapa: no convertiré esos píxeles en coordenadas GPS sin referencias geográficas fiables.';
     $('mapStatus').textContent='🧭 Trazo visual detectado. El siguiente paso es asociarlo a carreteras reales usando referencias geográficas de la captura; no se ha dibujado aún una ruta GPS.';
