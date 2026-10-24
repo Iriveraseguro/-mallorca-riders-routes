@@ -335,7 +335,12 @@ function initApp(){
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
-  $('traceScreenshotButton').onclick=()=>{startManualRoute();$('mapStatus').textContent='👆 Mira la captura y toca en el mapa los puntos del recorrido en orden. Coloca varios puntos en las curvas importantes y pulsa «Terminar puntos».';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
+  $('screenshotImportAlternatives').onclick=()=>{
+    const panel=$('importRoutePanel');
+    if(panel){panel.classList.remove('hidden');panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink')?.focus({preventScroll:true});}
+    $('mapStatus').textContent='🆓 Importación sin costes: pega un enlace de indicaciones de Google Maps o selecciona un archivo GPX/KML/GeoJSON. La captura por sí sola no aporta coordenadas GPS.';
+  };
+  $('traceScreenshotButton').onclick=()=>{startManualRoute();$('mapStatus').textContent='👆 Modo manual: toca en el mapa los puntos del recorrido en orden. Esta opción no es automática.';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
   $('loadMapsLinkButton').onclick=loadGoogleMapsLink;
 
   if(!initMap()){
@@ -881,7 +886,7 @@ function showRouteScreenshot(file){
   $('routeScreenshotPreview').src=screenshotObjectUrl;
   $('routeScreenshotName').textContent=file.name;
   $('routeScreenshotPanel').classList.remove('hidden');
-  $('mapStatus').textContent='📸 Captura cargada. Para reconstruir la ruta, marca manualmente varios puntos sobre el mapa siguiendo la imagen.';
+  $('mapStatus').textContent='📸 Captura cargada como referencia. Para mantener la app gratis, no enviamos la imagen a servicios externos; una captura no contiene coordenadas GPS que permitan dibujar la ruta automáticamente. Puedes importar un enlace de Google Maps o un archivo de ruta sin marcar puntos.';
 }
 function closeRouteScreenshot(){
   $('routeScreenshotPanel').classList.add('hidden');
