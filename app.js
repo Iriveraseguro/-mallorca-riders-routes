@@ -878,7 +878,7 @@ function maps(){
   $('mapStatus').textContent='🗺️ Abriendo Google Maps con origen, destino y hasta 3 puntos intermedios. Google puede recalcular algunos tramos.';
 }
 let screenshotObjectUrl=null;
-function showRouteScreenshot(file){
+async function showRouteScreenshot(file){
   if(!file)return;
   if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
   if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
@@ -886,7 +886,60 @@ function showRouteScreenshot(file){
   $('routeScreenshotPreview').src=screenshotObjectUrl;
   $('routeScreenshotName').textContent=file.name;
   $('routeScreenshotPanel').classList.remove('hidden');
-  $('mapStatus').textContent='📸 Captura cargada como referencia. Para mantener la app gratis, no enviamos la imagen a servicios externos; una captura no contiene coordenadas GPS que permitan dibujar la ruta automáticamente. Puedes importar un enlace de Google Maps o un archivo de ruta sin marcar puntos.';
+  const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas'),img=$('routeScreenshotPreview');
+  canvas.classList.add('hidden');canvas.style.display='none';
+  status.textContent='Analizando los colores de la captura en este dispositivo…';
+  $('mapStatus').textContent='📸 Analizando la captura localmente; no se sube a ningún servidor.';
+  try{
+    await new Promise((resolve,reject)=>{if(img.complete&&img.naturalWidth)resolve();else{img.onload=resolve;img.onerror=()=>reject(new Error('No se pudo abrir la imagen.'))}});
+    const maxSide=1100,scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
+    const w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));
+    canvas.width=w;canvas.height=h;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(img,0,0,w,h);
+    const frame=ctx.getImageData(0,0,w,h),d=frame.data;
+    let hits=0,minX=w,minY=h,maxX=0,maxY=0;
+    // Detect the characteristic blue/cyan route stroke used by common map styles.
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4,r=d[i],g=d[i+1],b=d[i+2];
+      const isBlue=b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100;
+      if(isBlue){hits++;if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}
+    }
+    if(hits<Math.max(45,w*h*0.00008)){
+      status.textContent='No he podido aislar una línea azul con suficiente confianza. Puede que la ruta sea de otro color o que la captura no muestre el trazado con claridad.';
+      $('mapStatus').textContent='⚠️ No se ha detectado una línea azul fiable. No se ha creado ninguna ruta.';
+      return;
+    }
+    // Keep the original map visible and mark likely route-colour pixels in magenta.
+    const original=ctx.getImageData(0,0,w,h);
+    for(let i=0;i<d.length;i+=4){
+      const r=d[i],g=d[i+1],b=d[i+2];
+      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){
+        d[i]=255;d[i+1]=30;d[i+2]=190;d[i+3]=235;
+      }else d[i+3]=0;
+    }
+    ctx.putImageData(original,0,0);
+    // Render a transparent overlay so the detected route pixels are easy to inspect.
+    const overlay=document.createElement('canvas');overlay.width=w;overlay.height=h;
+    const ox=overlay.getContext('2d');const mask=ox.createImageData(w,h);
+    for(let i=0;i<d.length;i+=4){
+      const r=d[i],g=d[i+1],b=d[i+2];
+      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){mask.data[i]=255;mask.data[i+1]=30;mask.data[i+2]=190;mask.data[i+3]=220;}
+    }
+    ox.putImageData(mask,0,0);
+    canvas.style.backgroundImage='url("'+screenshotObjectUrl+'")';
+    canvas.style.backgroundSize='100% 100%';
+    canvas.style.backgroundRepeat='no-repeat';
+    canvas.style.backgroundColor='transparent';
+    canvas.getContext('2d').clearRect(0,0,w,h);
+    canvas.getContext('2d').drawImage(overlay,0,0);
+    canvas.classList.remove('hidden');canvas.style.display='block';
+    status.textContent='He detectado '+hits.toLocaleString('es-ES')+' píxeles del posible trazado azul y lo he resaltado en magenta. Esto confirma la línea visual, pero todavía no demuestra dónde está en el mapa: no convertiré esos píxeles en coordenadas GPS sin referencias geográficas fiables.';
+    $('mapStatus').textContent='🧭 Trazo visual detectado. El siguiente paso es asociarlo a carreteras reales usando referencias geográficas de la captura; no se ha dibujado aún una ruta GPS.';
+  }catch(err){
+    status.textContent='No se pudo analizar la imagen: '+(err.message||'error desconocido');
+    $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
+  }
 }
 function closeRouteScreenshot(){
   $('routeScreenshotPanel').classList.add('hidden');
