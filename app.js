@@ -522,22 +522,37 @@ function routeShapeIsInRegion(coords,region,geometry){
   return false;
 }
 function poiQueryForStop(stop){
-  if(stop==='all')return [
-    'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
-  ];
-  if(stop.includes('Restaurante'))return [
-    'node["amenity"~"^(restaurant|fast_food)$"]',
-    'way["amenity"~"^(restaurant|fast_food)$"]'
-  ];
-  if(stop.includes('Café')||stop.includes('Bar'))return [
-    'node["amenity"~"^(cafe|bar|pub)$"]',
-    'way["amenity"~"^(cafe|bar|pub)$"]'
-  ];
-  if(stop.includes('Gasolinera'))return [
-    'node["amenity"="fuel"]',
-    'way["amenity"="fuel"]'
-  ];
+  const queries={
+    all:[
+      'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+      'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+      'node["tourism"="viewpoint"]',
+      'way["tourism"="viewpoint"]',
+      'relation["tourism"="viewpoint"]'
+    ],
+    restaurant:[
+      'node["amenity"~"^(restaurant|fast_food)$"]',
+      'way["amenity"~"^(restaurant|fast_food)$"]'
+    ],
+    cafe:[
+      'node["amenity"~"^(cafe|bar|pub)$"]',
+      'way["amenity"~"^(cafe|bar|pub)$"]'
+    ],
+    fuel:[
+      'node["amenity"="fuel"]',
+      'way["amenity"="fuel"]'
+    ],
+    viewpoint:[
+      'node["tourism"="viewpoint"]',
+      'way["tourism"="viewpoint"]',
+      'relation["tourism"="viewpoint"]'
+    ]
+  };
+  if(stop==='all')return queries.all;
+  if(stop.includes('Mirador'))return queries.viewpoint;
+  if(stop.includes('Restaurante'))return queries.restaurant;
+  if(stop.includes('Café')||stop.includes('Bar'))return queries.cafe;
+  if(stop.includes('Gasolinera'))return queries.fuel;
   return [];
 }
 
@@ -596,7 +611,7 @@ async function findRealStops(coords,stop){
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:8];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
+    const endpoint='/api/overpass';
     let data=null;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
     try{
