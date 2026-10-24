@@ -9,8 +9,12 @@ export default {
       if (!contentType.toLowerCase().includes("text/plain")) return Response.json({error:"La consulta debe enviarse como texto."},{status:415,headers});
       let query = "";
       try { query = await request.text(); } catch { return Response.json({error:"No se pudo leer la consulta."},{status:400,headers}); }
-      if (!query || query.length > 30000 || !query.includes("[out:json]") || !query.includes(");out center tags;")) {
-        return Response.json({error:"Consulta Overpass vacía, demasiado grande o no válida."},{status:400,headers});
+      const prefix = "[out:json][timeout:8];(";
+      const suffix = ");out center tags;";
+      const allowedClause = /^(?:node|way|relation)\[(?:"amenity"~"\^\((?:restaurant\\|fast_food\\|cafe\\|bar\\|pub\\|fuel|restaurant\\|fast_food|cafe\\|bar\\|pub)\)\$"|"amenity"="fuel"|"tourism"="viewpoint")\]\(around:2000,-?\d+\.\d{5},-?\d+\.\d{5}\)$/;
+      const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";") : [];
+      if (!query || query.length > 12000 || clauses.length < 1 || clauses.length > 20 || clauses.some(clause => !allowedClause.test(clause))) {
+        return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
       try {
         const response = await fetch("https://overpass-api.de/api/interpreter", {
