@@ -1,4 +1,5 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
+let screenshotCalibrationStage=null,screenshotImagePoints=[],screenshotMapPoints=[],screenshotOverlay=null,screenshotCalibrationZoom=null;
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -9,7 +10,7 @@ function initMap(){
   try{
     map=L.map(el,{zoomControl:true,preferCanvas:true}).setView([39.62,2.95],10);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
-    map.on('click',e=>{if(manualMode)addManualWaypoint(e.latlng);});
+    map.on('click',e=>{if(screenshotCalibrationStage==='map'){handleScreenshotMapClick(e.latlng);return}if(manualMode)addManualWaypoint(e.latlng);});
     setTimeout(()=>map&&map.invalidateSize(),50);
     return map;
   }catch(err){
@@ -335,12 +336,14 @@ function initApp(){
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
+  $('alignScreenshotButton').onclick=beginScreenshotAlignment;
+  $('traceScreenshotButton').onclick=()=>{if(!screenshotOverlay){$('mapStatus').textContent='Primero pulsa «Alinear captura con mapa» y sigue los pasos.';return}startManualRoute();$('mapStatus').textContent='👆 Toca sobre la línea de la captura, en el mapa, para marcar los puntos del recorrido en orden. Después pulsa «Terminar puntos».';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
+  $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100)};
   $('screenshotImportAlternatives').onclick=()=>{
     const panel=$('importRoutePanel');
     if(panel){panel.classList.remove('hidden');panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink')?.focus({preventScroll:true});}
     $('mapStatus').textContent='🆓 Importación sin costes: pega un enlace de indicaciones de Google Maps o selecciona un archivo GPX/KML/GeoJSON. La captura por sí sola no aporta coordenadas GPS.';
   };
-  $('traceScreenshotButton').onclick=()=>{startManualRoute();$('mapStatus').textContent='👆 Modo manual: toca en el mapa los puntos del recorrido en orden. Esta opción no es automática.';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
   $('loadMapsLinkButton').onclick=loadGoogleMapsLink;
 
   if(!initMap()){
@@ -893,6 +896,11 @@ async function showRouteScreenshot(file){
   screenshotObjectUrl=URL.createObjectURL(file);
   $('routeScreenshotPreview').src=screenshotObjectUrl;
   $('routeScreenshotName').textContent=file.name;
+  screenshotReferenceActive=true;
+  screenshotCalibrationStage=null;screenshotImagePoints=[];screenshotMapPoints=[];
+  if(screenshotOverlay&&map){map.removeLayer(screenshotOverlay);screenshotOverlay=null}
+  $('alignScreenshotButton').disabled=false;
+  $('screenshotOpacity').value='65';
   $('routeScreenshotPanel').classList.remove('hidden');
   const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas'),img=$('routeScreenshotPreview');
   canvas.classList.add('hidden');canvas.style.display='none';
@@ -960,7 +968,74 @@ async function showRouteScreenshot(file){
     $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
   }
 }
+function beginScreenshotAlignment(){
+  if(!screenshotObjectUrl){$('routeTraceStatus').textContent='Primero selecciona una captura.';return}
+  screenshotCalibrationStage='image';screenshotImagePoints=[];screenshotMapPoints=[];screenshotCalibrationZoom=null;
+  const img=$('routeScreenshotPreview');img.style.cursor='crosshair';
+  img.onclick=handleScreenshotImageClick;
+  $('routeTraceStatus').textContent='PASO 1/2: toca en la imagen dos puntos reconocibles, separados y en diagonal: primero uno hacia arriba/izquierda y luego otro hacia abajo/derecha. Por ejemplo, dos cruces de carreteras.';
+  $('mapStatus').textContent='📸 Alineación iniciada. Primero marca los dos puntos en la captura de arriba.';
+  $('routeScreenshotPanel').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function handleScreenshotImageClick(event){
+  if(screenshotCalibrationStage!=='image')return;
+  const img=$('routeScreenshotPreview'),rect=img.getBoundingClientRect();
+  const x=Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width));
+  const y=Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height));
+  screenshotImagePoints.push({x,y});
+  if(screenshotImagePoints.length===1){
+    $('routeTraceStatus').textContent='Punto 1 guardado. Ahora toca un segundo punto claramente reconocible, situado más abajo y a la derecha que el primero.';
+    return;
+  }
+  const [p1,p2]=screenshotImagePoints;
+  if(p2.x-p1.x<0.03||p2.y-p1.y<0.03){
+    screenshotImagePoints=[];
+    $('routeTraceStatus').textContent='Los puntos deben estar separados y el segundo debe quedar abajo y a la derecha del primero. Vuelve a marcar los dos.';
+    return;
+  }
+  screenshotCalibrationStage='map';screenshotCalibrationZoom=map.getZoom();
+  $('routeScreenshotPanel').classList.add('hidden');
+  $('routeTraceStatus').textContent='PASO 2/2: ahora toca en el mapa real el mismo primer punto (el de arriba/izquierda). Después toca el segundo punto correspondiente.';
+  $('mapStatus').textContent='🗺️ Toca en el mapa la ubicación real que corresponde al primer punto de la captura.';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function handleScreenshotMapClick(latlng){
+  if(!map||screenshotCalibrationStage!=='map')return;
+  if(map.getZoom()!==screenshotCalibrationZoom){
+    screenshotCalibrationZoom=map.getZoom();screenshotMapPoints=[];
+    $('mapStatus').textContent='Has cambiado el zoom. Vuelve a tocar los dos puntos reales con el mismo zoom, empezando por el primero.';
+    $('routeTraceStatus').textContent='Toca en el mapa real el primer punto y después el segundo, sin cambiar el zoom.';
+    return;
+  }
+  screenshotMapPoints.push(latlng);
+  if(screenshotMapPoints.length===1){$('mapStatus').textContent='✅ Primer punto real guardado. Toca ahora la ubicación del segundo punto.';return}
+  const [a,b]=screenshotMapPoints,[p1,p2]=screenshotImagePoints;
+  const z=screenshotCalibrationZoom,pa=map.project(a,z),pb=map.project(b,z);
+  const dx=p2.x-p1.x,dy=p2.y-p1.y;
+  const sx=(pb.x-pa.x)/dx,sy=(pb.y-pa.y)/dy;
+  if(!Number.isFinite(sx)||!Number.isFinite(sy)||sx<=0||sy<=0||Math.abs(sx)<1||Math.abs(sy)<1){
+    screenshotCalibrationStage='image';screenshotImagePoints=[];screenshotMapPoints=[];
+    $('routeScreenshotPanel').classList.remove('hidden');
+    $('routeTraceStatus').textContent='No he podido alinear esos puntos. Pulsa «Alinear captura con mapa» y elige referencias más separadas.';
+    $('mapStatus').textContent='⚠️ Los puntos no forman una alineación válida. Inténtalo con dos cruces bien separados.';
+    return;
+  }
+  const x0=pa.x-sx*p1.x,y0=pa.y-sy*p1.y,x1=x0+sx,y1=y0+sy;
+  const nw=map.unproject([x0,y0],z),se=map.unproject([x1,y1],z);
+  const bounds=L.latLngBounds(nw,se);
+  if(screenshotOverlay)map.removeLayer(screenshotOverlay);
+  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:false}).addTo(map);
+  screenshotCalibrationStage=null;
+  $('routeScreenshotPreview').style.cursor='';$('routeScreenshotPreview').onclick=null;
+  $('routeScreenshotPanel').classList.remove('hidden');
+  map.fitBounds(bounds,{padding:[20,20]});
+  $('routeTraceStatus').textContent='✅ Captura colocada sobre el mapa. Ajusta la transparencia para ver las carreteras y después pulsa «Trazar ruta sobre el mapa». La alineación depende de los dos puntos elegidos.';
+  $('mapStatus').textContent='✅ Captura alineada. Ahora puedes marcar los puntos siguiendo la línea de la ruta.';
+}
 function closeRouteScreenshot(){
+  screenshotCalibrationStage=null;screenshotImagePoints=[];screenshotMapPoints=[];
+  if(screenshotOverlay&&map){map.removeLayer(screenshotOverlay);screenshotOverlay=null}
+  $('routeScreenshotPreview').style.cursor='';$('routeScreenshotPreview').onclick=null;
   screenshotReferenceActive=false;
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
