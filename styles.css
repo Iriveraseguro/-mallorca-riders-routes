@@ -7,3 +7,9 @@
 .delete-manual-point{margin-top:8px;background:#9f1239;color:#fff;border:0;border-radius:8px;padding:8px 10px;font-weight:700;cursor:pointer}.leaflet-popup-content{min-width:150px}
 
 #authCard input[type="email"],#authCard input[type="password"]{display:block;width:100%;margin-top:7px;background:#252528;color:#fff;border:1px solid #3b3b40;border-radius:12px;padding:12px;font-size:16px}#authCard .actions{margin:12px 0}#authStatus{margin-top:12px;line-height:1.5}#authCard .hidden{display:none!important}
+
+.route-screenshot-panel,.maps-link-import{margin:12px 0;padding:14px;border:1px solid #3b3b40;border-radius:12px;background:#1c1c1f}.route-screenshot-panel.hidden{display:none!important}.screenshot-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}.route-screenshot-panel img{display:block;max-width:100%;max-height:380px;object-fit:contain;margin:10px auto;border-radius:8px}.maps-link-import label{display:block;margin-bottom:8px}.maps-link-import input{display:block;width:100%;box-sizing:border-box;margin-bottom:8px;background:#252528;color:#fff;border:1px solid #3b3b40;border-radius:10px;padding:12px;font-size:16px}.maps-link-import small{display:block;color:#aaa;margin-top:8px}.route-screenshot-panel .note{line-height:1.5}
+
+
+/* Flechas azules que indican el sentido de circulación en cada ruta. */
+.route-direction-icon{background:transparent!important;border:0!important;pointer-events:none!important}.route-direction-arrow{display:block;width:24px;height:24px;color:#1683ff;font-size:24px;line-height:24px;font-weight:900;text-align:center;text-shadow:-1px -1px 2px #fff,1px 1px 2px #fff,0 0 5px #fff;transform-origin:50% 50%;}
