@@ -400,6 +400,7 @@ function initApp(){
     return;
   }
   $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
+  $('drawRouteButton').onclick=startFreehandDrawing;
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('refreshApp').onclick=refreshApplication;
