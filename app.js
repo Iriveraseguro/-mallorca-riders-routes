@@ -604,7 +604,7 @@ async function findRealStops(coords,stop){
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='/overpass';
     let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
     try{
       const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
@@ -618,7 +618,7 @@ async function findRealStops(coords,stop){
       const json=await res.json();
       if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
       data=json;
-    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 16 segundos');throw error}finally{clearTimeout(timer)}
+    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 25 segundos');throw error}finally{clearTimeout(timer)}
     if(!data)throw new Error('sin respuesta del servidor');
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
