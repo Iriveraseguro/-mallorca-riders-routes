@@ -1145,7 +1145,21 @@ async function importRouteFile(file){
     map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
     const km=Math.round(shape.reduce((sum,p,i)=>i?sum+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:p[0],lon:p[1]}):sum,0));
     const routeName=file.name.replace(/\.(gpx|kml|geojson|json)$/i,'').replace(/[_-]+/g,' ').trim()||'Ruta importada';
-    current={id:Date.now(),name:routeName,km:km+' km',duration:'',curves:3,stop:'none',realStop:null,realStops:[],poiError:null,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Importada',type:'Mixta',shape,routePoints:[],region:$('region').value,start:'Ruta importada',requestedKm:km,requestedDuration:0,requestedNote:'Importada desde '+file.name};
+    const selectedStop=$('stop').value;
+    let realStops=[],poiError=null;
+    if(selectedStop!=='none'){
+      $('mapStatus').textContent='📍 Ruta importada. Buscando establecimientos cercanos…';
+      const poiResult=await findRealStops(shape,selectedStop);
+      realStops=poiResult.places;poiError=poiResult.error;
+      realStops.forEach(place=>{
+        const cat=place.category;
+        const popup='<b>'+escapeHtml(place.name)+'</b><br>'+cat.emoji+' '+cat.name+'<br>A '+place.distanceKm.toFixed(1)+' km de la ruta';
+        const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
+        marker.bindTooltip(cat.emoji+' '+escapeHtml(place.name),{sticky:true,direction:'top',opacity:0.96});
+        routeMarkers.push(marker);
+      });
+    }
+    current={id:Date.now(),name:routeName,km:km+' km',duration:'',curves:3,stop:selectedStop,realStop:realStops[0]||null,realStops,poiError,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Importada',type:'Mixta',shape,routePoints:[],region:$('region').value,start:'Ruta importada',requestedKm:km,requestedDuration:0,requestedNote:'Importada desde '+file.name};
     render(current);
     $('mapStatus').textContent='✅ Ruta importada: '+shape.length+' puntos · '+km+' km. Puedes guardarla, compartirla o abrirla en Google Maps.';
     $('result').scrollIntoView({behavior:'smooth'});
