@@ -729,8 +729,8 @@ async function requestRoute(locations,plan){
 }
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
-    $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Para no dibujar una ruta en otra zona, importa un enlace/archivo de ruta o pulsa «Marcar puntos manualmente» y coloca al menos 2 puntos sobre el mapa.';
-    $('routeTraceStatus').textContent='La línea azul se ha detectado visualmente, pero aún no está geolocalizada. Usa un enlace/GPX o coloca puntos en el mapa para generar una ruta fiable.';
+    $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Pulsa «✏️ Dibujar recorrido» y dibuja la línea directamente sobre el mapa, o importa un enlace/archivo de ruta.';
+    $('routeTraceStatus').textContent='La captura es una referencia visual, no una ruta GPS. Puedes dibujar el recorrido directamente sobre el mapa; la app convertirá el trazo en puntos de paso.';
     $('map').scrollIntoView({behavior:'smooth',block:'center'});
     return;
   }
