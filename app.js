@@ -386,6 +386,7 @@ function initApp(){
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
   $('alignScreenshotButton').onclick=beginScreenshotAlignment;
+  $('showScreenshotOnMapButton').onclick=showScreenshotOnMap;
   $('traceScreenshotButton').onclick=startFreehandDrawing;
   $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100)};
   $('screenshotImportAlternatives').onclick=()=>{
@@ -1036,6 +1037,25 @@ async function showRouteScreenshot(file){
     status.textContent='No se pudo analizar la imagen: '+(err.message||'error desconocido');
     $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
   }
+}
+function showScreenshotOnMap(){
+  if(!screenshotObjectUrl||!$('routeScreenshotPreview').naturalWidth){$('routeTraceStatus').textContent='Primero selecciona una captura JPG, PNG o PDF.';return}
+  if(!initMap()){$('routeTraceStatus').textContent='El mapa aún no está listo. Inténtalo de nuevo.';return}
+  map.invalidateSize();
+  const size=map.getSize(),img=$('routeScreenshotPreview');
+  const imageRatio=img.naturalWidth/img.naturalHeight;
+  let w=size.x,h=size.y;
+  if(w/h>imageRatio)w=h*imageRatio;else h=w/imageRatio;
+  const center=map.getSize().divideBy(2);
+  const topLeft=map.containerPointToLatLng([center.x-w/2,center.y-h/2]);
+  const bottomRight=map.containerPointToLatLng([center.x+w/2,center.y+h/2]);
+  const bounds=L.latLngBounds(topLeft,bottomRight);
+  if(screenshotOverlay)map.removeLayer(screenshotOverlay);
+  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:false}).addTo(map);
+  screenshotOverlay.bringToFront();
+  $('routeTraceStatus').textContent='✅ La captura ya está encima del mapa. Ajusta la transparencia. Para colocarla con precisión, pulsa «Alinear captura con mapa» y marca dos cruces en la imagen y las mismas dos en el mapa.';
+  $('mapStatus').textContent='📸 Captura superpuesta como referencia. No está geolocalizada todavía: alinéala con dos cruces para hacerla coincidir con las carreteras.';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
 }
 function beginScreenshotAlignment(){
   if(!$('routeScreenshotPreview').src){$('routeTraceStatus').textContent='Primero selecciona una captura.';return}
