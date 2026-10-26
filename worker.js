@@ -4,7 +4,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/overpass") {
-      const headers = {"Access-Control-Allow-Origin": request.headers.get("Origin") || url.origin,"Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type, Accept","Vary":"Origin","Cache-Control":"no-store"};
+      const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type, Accept","Vary":"Origin","Cache-Control":"no-store"};
       if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
       if (request.method !== "POST") return Response.json({error:"Método no permitido."},{status:405,headers});
       const query = await request.text();
