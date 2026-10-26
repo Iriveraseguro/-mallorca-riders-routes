@@ -1,5 +1,6 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
 let screenshotCalibrationStage=null,screenshotImagePoints=[],screenshotMapPoints=[],screenshotOverlay=null,screenshotCalibrationZoom=null;
+let freehandDrawMode=false,freehandDrawing=false,freehandPath=[],freehandLine=null;
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -10,7 +11,8 @@ function initMap(){
   try{
     map=L.map(el,{zoomControl:true,preferCanvas:true}).setView([39.62,2.95],10);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
-    map.on('click',e=>{if(screenshotCalibrationStage==='map'){handleScreenshotMapClick(e.latlng);return}if(manualMode)addManualWaypoint(e.latlng);});
+    map.on('click',e=>{if(screenshotCalibrationStage==='map'){handleScreenshotMapClick(e.latlng);return}if(manualMode&&!freehandDrawMode)addManualWaypoint(e.latlng);});
+    installFreehandDrawing();
     setTimeout(()=>map&&map.invalidateSize(),50);
     return map;
   }catch(err){
@@ -161,7 +163,42 @@ function addManualWaypoint(latlng){
 }
 function startManualRoute(){manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
 function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
-function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
+function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');if(freehandLine&&map){map.removeLayer(freehandLine);freehandLine=null}freehandDrawMode=false;freehandDrawing=false;if(map&&map.dragging)map.dragging.enable();$('map').classList.remove('draw-active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
+function installFreehandDrawing(){
+  const el=$('map');if(!el||el.dataset.freehandReady)return;el.dataset.freehandReady='1';
+  el.addEventListener('pointerdown',e=>{
+    if(!freehandDrawMode||e.button!==0)return;
+    e.preventDefault();e.stopPropagation();freehandDrawing=true;freehandPath=[map.mouseEventToLatLng(e)];
+    if(freehandLine&&map)map.removeLayer(freehandLine);
+    freehandLine=L.polyline(freehandPath,{color:'#087cff',weight:5,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map);
+    try{el.setPointerCapture(e.pointerId)}catch(_){}
+  },true);
+  el.addEventListener('pointermove',e=>{
+    if(!freehandDrawMode||!freehandDrawing)return;
+    e.preventDefault();const p=map.mouseEventToLatLng(e),last=freehandPath[freehandPath.length-1];
+    if(!last||map.latLngToContainerPoint(last).distanceTo(map.latLngToContainerPoint(p))>=8){freehandPath.push(p);freehandLine.setLatLngs(freehandPath)}
+  },true);
+  const finish=e=>{
+    if(!freehandDrawing)return;e.preventDefault();freehandDrawing=false;
+    if(map&&map.dragging)map.dragging.enable();el.classList.remove('draw-active');
+    const path=freehandPath.slice();freehandDrawMode=false;manualMode=false;$('manualMode').classList.remove('active');
+    if(path.length<2||path[0].distanceTo(path[path.length-1])<0.15){$('mapStatus').textContent='⚠️ El trazo es demasiado corto. Activa «Dibujar ruta a mano» y dibuja una línea más larga.';return}
+    manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];
+    const count=Math.min(8,Math.max(2,Math.ceil(path[0].distanceTo(path[path.length-1])/4)+1));
+    for(let i=0;i<count;i++){const index=Math.round(i*(path.length-1)/(count-1));addManualWaypoint(path[index])}
+    if(manualWaypoints.length>=2){manualRouteActive=true;$('mapStatus').textContent='✅ Trazo convertido en '+manualWaypoints.length+' puntos de paso. Pulsa «Generar ruta» para ajustarla a las carreteras.';}
+    else{$('mapStatus').textContent='⚠️ No se pudieron usar esos puntos. Comprueba que el trazo está dentro de la zona seleccionada.'}
+  };
+  el.addEventListener('pointerup',finish,true);el.addEventListener('pointercancel',finish,true);
+}
+function startFreehandDrawing(){
+  if(!initMap())return;
+  freehandDrawMode=true;freehandDrawing=false;freehandPath=[];manualMode=false;manualRouteActive=false;
+  $('manualMode').classList.remove('active');$('map').classList.add('draw-active');$('map').style.touchAction='none';
+  if(map.dragging)map.dragging.disable();
+  $('mapStatus').textContent='✏️ Dibuja con el dedo o ratón sobre el mapa siguiendo la ruta aproximada. Al soltar, se crearán puntos de paso.';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
 
 const PENINSULA={
   barcelona:{name:'Barcelona',lat:41.3874,lon:2.1686,targets:{Mixta:[41.73,2.25],Curvas:[41.65,2.45],Costa:[41.96,3.20],Montaña:[42.15,2.52]}},
@@ -337,7 +374,7 @@ function initApp(){
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
   $('alignScreenshotButton').onclick=beginScreenshotAlignment;
-  $('traceScreenshotButton').onclick=()=>{if(!screenshotOverlay){$('mapStatus').textContent='Primero pulsa «Alinear captura con mapa» y sigue los pasos.';return}startManualRoute();$('mapStatus').textContent='👆 Toca sobre la línea de la captura, en el mapa, para marcar los puntos del recorrido en orden. Después pulsa «Terminar puntos».';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
+  $('traceScreenshotButton').onclick=startFreehandDrawing;
   $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100)};
   $('screenshotImportAlternatives').onclick=()=>{
     const panel=$('importRoutePanel');
