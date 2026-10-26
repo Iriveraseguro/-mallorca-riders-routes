@@ -1,5 +1,5 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
-let screenshotCalibrationStage=null,screenshotImagePoints=[],screenshotMapPoints=[],screenshotOverlay=null,screenshotCalibrationZoom=null;
+let screenshotCalibrationStage=null,screenshotImagePoints=[],screenshotMapPoints=[],screenshotOverlay=null,screenshotCalibrationZoom=null,screenshotMoveMode=false;
 let freehandDrawMode=false,freehandDrawing=false,freehandPath=[],freehandLine=null;
 const $=x=>document.getElementById(x);
 
@@ -1038,6 +1038,50 @@ async function showRouteScreenshot(file){
     $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
   }
 }
+function toggleScreenshotMoveMode(){
+  if(!screenshotOverlay||!map){$('routeTraceStatus').textContent='Primero muestra la captura encima del mapa.';return}
+  screenshotMoveMode=!screenshotMoveMode;
+  const button=$('moveScreenshotButton');
+  button.textContent=screenshotMoveMode?'✅ Terminar de mover captura':'↔️ Mover captura para encajarla';
+  button.classList.toggle('primary',screenshotMoveMode);
+  button.classList.toggle('map-button',!screenshotMoveMode);
+  const el=screenshotOverlay.getElement();
+  if(el){el.style.pointerEvents='auto';el.style.cursor=screenshotMoveMode?'move':'default';el.style.touchAction=screenshotMoveMode?'none':''}
+  $('routeTraceStatus').textContent=screenshotMoveMode
+    ?'MODO MOVER: arrastra la captura con el ratón o el dedo hasta encajar las carreteras. Cuando esté bien colocada, pulsa «Terminar de mover captura» y después podrás dibujar los puntos.'
+    :'Captura fijada en esta posición. Ya puedes dibujar la ruta a mano sobre el mapa.';
+}
+function enableScreenshotOverlayDragging(){
+  if(!screenshotOverlay||!map)return;
+  const el=screenshotOverlay.getElement();
+  if(!el||el.dataset.dragReady==='1')return;
+  el.dataset.dragReady='1';el.style.pointerEvents='auto';el.style.touchAction='none';
+  let drag=null;
+  el.addEventListener('pointerdown',event=>{
+    if(!screenshotMoveMode)return;
+    event.preventDefault();event.stopPropagation();
+    const z=map.getZoom(),bounds=screenshotOverlay.getBounds();
+    drag={pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,z,
+      nw:map.project(bounds.getNorthWest(),z),se:map.project(bounds.getSouthEast(),z)};
+    if(el.setPointerCapture)el.setPointerCapture(event.pointerId);
+    map.dragging.disable();
+  });
+  el.addEventListener('pointermove',event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    event.preventDefault();event.stopPropagation();
+    const dx=event.clientX-drag.startX,dy=event.clientY-drag.startY;
+    const nw=map.unproject([drag.nw.x+dx,drag.nw.y+dy],drag.z);
+    const se=map.unproject([drag.se.x+dx,drag.se.y+dy],drag.z);
+    screenshotOverlay.setBounds(L.latLngBounds(nw,se));
+  });
+  const finish=event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    event.preventDefault();event.stopPropagation();drag=null;
+    map.dragging.enable();
+  };
+  el.addEventListener('pointerup',finish);
+  el.addEventListener('pointercancel',finish);
+}
 function showScreenshotOnMap(){
   if(!screenshotObjectUrl||!$('routeScreenshotPreview').naturalWidth){$('routeTraceStatus').textContent='Primero selecciona una captura JPG, PNG o PDF.';return}
   if(!initMap()){$('routeTraceStatus').textContent='El mapa aún no está listo. Inténtalo de nuevo.';return}
@@ -1051,7 +1095,8 @@ function showScreenshotOnMap(){
   const bottomRight=map.containerPointToLatLng([center.x+w/2,center.y+h/2]);
   const bounds=L.latLngBounds(topLeft,bottomRight);
   if(screenshotOverlay)map.removeLayer(screenshotOverlay);
-  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:false}).addTo(map);
+  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:true}).addTo(map);
+  enableScreenshotOverlayDragging();
   screenshotOverlay.bringToFront();
   $('routeTraceStatus').textContent='✅ La captura ya está encima del mapa. Ajusta la transparencia. Para colocarla con precisión, pulsa «Alinear captura con mapa» y marca dos cruces en la imagen y las mismas dos en el mapa.';
   $('mapStatus').textContent='📸 Captura superpuesta como referencia. No está geolocalizada todavía: alinéala con dos cruces para hacerla coincidir con las carreteras.';
@@ -1118,7 +1163,10 @@ function handleScreenshotMapClick(latlng){
   const nw=map.unproject([x0,y0],z),se=map.unproject([x1,y1],z);
   const bounds=L.latLngBounds(nw,se);
   if(screenshotOverlay)map.removeLayer(screenshotOverlay);
-  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:false}).addTo(map);
+  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:true}).addTo(map);
+  enableScreenshotOverlayDragging();
+  screenshotMoveMode=false;
+  if($('moveScreenshotButton'))$('moveScreenshotButton').textContent='↔️ Mover captura para encajarla';
   screenshotCalibrationStage=null;
   $('routeScreenshotPreview').style.cursor='';$('routeScreenshotPreview').onclick=null;
   $('routeScreenshotPanel').classList.remove('hidden');
