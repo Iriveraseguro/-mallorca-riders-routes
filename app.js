@@ -644,19 +644,19 @@ async function findRealStops(coords,stop){
   try{
     // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
     // un rectángulo enorme que incluye mucha zona ajena a la ruta.
-   const sampleCount=Math.min(4,Math.max(3,Math.ceil(coords.length/180)));
+   const sampleCount=Math.min(3,Math.max(3,Math.ceil(coords.length/180)));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
       const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:6];('+clauses+');out center tags;';
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1500,'+p.lat+','+p.lon+');')).join('');
+    const query='[out:json][timeout:20];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='/overpass';
     let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),40000);
     try{
       const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
@@ -670,7 +670,7 @@ async function findRealStops(coords,stop){
       const json=await res.json();
       if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
       data=json;
-    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 25 segundos');throw error}finally{clearTimeout(timer)}
+    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 40 segundos');throw error}finally{clearTimeout(timer)}
     if(!data)throw new Error('sin respuesta del servidor');
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
