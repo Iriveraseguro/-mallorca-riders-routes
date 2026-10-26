@@ -527,7 +527,9 @@ function routeShapeIsInRegion(coords,region,geometry){
 function poiQueryForStop(stop){
   if(stop==='all')return [
     'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
   ];
   if(stop.includes('Restaurante'))return [
     'node["amenity"~"^(restaurant|fast_food)$"]',
@@ -537,6 +539,7 @@ function poiQueryForStop(stop){
     'node["amenity"~"^(cafe|bar|pub)$"]',
     'way["amenity"~"^(cafe|bar|pub)$"]'
   ];
+  if(stop.includes('Mirador'))return ['node["tourism"="viewpoint"]','way["tourism"="viewpoint"]'];
   if(stop.includes('Gasolinera'))return [
     'node["amenity"="fuel"]',
     'way["amenity"="fuel"]'
@@ -589,17 +592,17 @@ async function findRealStops(coords,stop){
   try{
     // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
     // un rectángulo enorme que incluye mucha zona ajena a la ruta.
-   const sampleCount=3;
+   const sampleCount=Math.min(8,Math.max(3,Math.ceil(coords.length/100)));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
       const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:3000,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:8];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
+    const endpoint='/overpass';
     let data=null;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
     try{
@@ -889,12 +892,28 @@ function maps(){
 let screenshotObjectUrl=null,screenshotReferenceActive=false;
 async function showRouteScreenshot(file){
   if(!file)return;
-  if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
+  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);if(!isPdf&&!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG, WEBP o un PDF.');return}
   // Desde que se elige una captura, bloquear la generación normal hasta cerrar
   // el panel o elegir puntos geográficos reales; incluso si falla la detección.
-  if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
-  screenshotObjectUrl=URL.createObjectURL(file);
-  $('routeScreenshotPreview').src=screenshotObjectUrl;
+  if(screenshotObjectUrl&&screenshotObjectUrl.startsWith('blob:'))URL.revokeObjectURL(screenshotObjectUrl);
+  screenshotObjectUrl=null;
+  const preview=$('routeScreenshotPreview');
+  if(isPdf){
+    try{
+      if(!window.pdfjsLib)throw new Error('No se ha cargado el lector PDF. Comprueba la conexión y vuelve a intentarlo.');
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const pdf=await window.pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+      const page=await pdf.getPage(1),viewport=page.getViewport({scale:1.6});
+      const pdfCanvas=document.createElement('canvas');
+      pdfCanvas.width=Math.ceil(viewport.width);pdfCanvas.height=Math.ceil(viewport.height);
+      await page.render({canvasContext:pdfCanvas.getContext('2d'),viewport}).promise;
+      screenshotObjectUrl=pdfCanvas.toDataURL('image/png');
+      preview.src=screenshotObjectUrl;
+    }catch(error){alert('No he podido abrir el PDF. '+(error?.message||''));return}
+  }else{
+    screenshotObjectUrl=URL.createObjectURL(file);
+    preview.src=screenshotObjectUrl;
+  }
   $('routeScreenshotName').textContent=file.name;
   screenshotReferenceActive=true;
   screenshotCalibrationStage=null;screenshotImagePoints=[];screenshotMapPoints=[];
@@ -969,7 +988,7 @@ async function showRouteScreenshot(file){
   }
 }
 function beginScreenshotAlignment(){
-  if(!screenshotObjectUrl){$('routeTraceStatus').textContent='Primero selecciona una captura.';return}
+  if(!$('routeScreenshotPreview').src){$('routeTraceStatus').textContent='Primero selecciona una captura.';return}
   screenshotCalibrationStage='image';screenshotImagePoints=[];screenshotMapPoints=[];screenshotCalibrationZoom=null;
   const img=$('routeScreenshotPreview');img.style.cursor='crosshair';
   img.onclick=handleScreenshotImageClick;
@@ -1039,7 +1058,7 @@ function closeRouteScreenshot(){
   screenshotReferenceActive=false;
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
-  if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
+  if(screenshotObjectUrl&&screenshotObjectUrl.startsWith('blob:'))URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null;
 }
 async function loadGoogleMapsLink(){
   const raw=$('googleMapsLink').value.trim();
