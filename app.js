@@ -387,6 +387,7 @@ function initApp(){
   $('closeScreenshot').onclick=closeRouteScreenshot;
   $('alignScreenshotButton').onclick=beginScreenshotAlignment;
   $('showScreenshotOnMapButton').onclick=showScreenshotOnMap;
+  $('moveScreenshotButton').onclick=toggleScreenshotMoveMode;
   $('traceScreenshotButton').onclick=startFreehandDrawing;
   $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100)};
   $('screenshotImportAlternatives').onclick=()=>{
