@@ -1046,7 +1046,7 @@ function toggleScreenshotMoveMode(){
   button.classList.toggle('primary',screenshotMoveMode);
   button.classList.toggle('map-button',!screenshotMoveMode);
   const el=screenshotOverlay.getElement();
-  if(el){el.style.pointerEvents='auto';el.style.cursor=screenshotMoveMode?'move':'default';el.style.touchAction=screenshotMoveMode?'none':''}
+  if(el){el.style.pointerEvents=screenshotMoveMode?'auto':'none';el.style.cursor=screenshotMoveMode?'move':'default';el.style.touchAction=screenshotMoveMode?'none':''}
   $('routeTraceStatus').textContent=screenshotMoveMode
     ?'MODO MOVER: arrastra la captura con el ratón o el dedo hasta encajar las carreteras. Cuando esté bien colocada, pulsa «Terminar de mover captura» y después podrás dibujar los puntos.'
     :'Captura fijada en esta posición. Ya puedes dibujar la ruta a mano sobre el mapa.';
@@ -1055,7 +1055,7 @@ function enableScreenshotOverlayDragging(){
   if(!screenshotOverlay||!map)return;
   const el=screenshotOverlay.getElement();
   if(!el||el.dataset.dragReady==='1')return;
-  el.dataset.dragReady='1';el.style.pointerEvents='auto';el.style.touchAction='none';
+  el.dataset.dragReady='1';el.style.pointerEvents=screenshotMoveMode?'auto':'none';el.style.touchAction='none';
   let drag=null;
   el.addEventListener('pointerdown',event=>{
     if(!screenshotMoveMode)return;
