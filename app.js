@@ -182,11 +182,23 @@ function installFreehandDrawing(){
     if(!freehandDrawing)return;e.preventDefault();freehandDrawing=false;
     if(map&&map.dragging)map.dragging.enable();el.classList.remove('draw-active');
     const path=freehandPath.slice();freehandDrawMode=false;manualMode=false;$('manualMode').classList.remove('active');
-    if(path.length<2||path[0].distanceTo(path[path.length-1])<0.15){$('mapStatus').textContent='⚠️ El trazo es demasiado corto. Activa «Dibujar ruta a mano» y dibuja una línea más larga.';return}
+    // Medir el recorrido completo, no solo la distancia entre el inicio y el final:
+    // así también se admiten trazos curvos y circuitos que terminan cerca del inicio.
+    if(path.length<2){$('mapStatus').textContent='⚠️ El trazo es demasiado corto. Activa «Dibujar ruta a mano» y dibuja una línea más larga.';return}
+    const cumulative=[0];let totalKm=0;
+    for(let i=1;i<path.length;i++){totalKm+=path[i-1].distanceTo(path[i])/1000;cumulative.push(totalKm)}
+    if(totalKm<0.25){$('mapStatus').textContent='⚠️ El trazo es demasiado corto. Acércate al mapa y dibuja un recorrido más largo.';return}
+    const count=Math.min(8,Math.max(2,Math.ceil(totalKm/4)+1)),sampled=[];
+    for(let i=0;i<count;i++){
+      const target=totalKm*i/(count-1);let j=1;
+      while(j<cumulative.length-1&&cumulative[j]<target)j++;
+      const span=cumulative[j]-cumulative[j-1],t=span?(target-cumulative[j-1])/span:0;
+      const a=path[j-1],b=path[j];
+      sampled.push(L.latLng(a.lat+(b.lat-a.lat)*t,a.lng+(b.lng-a.lng)*t));
+    }
     manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];
-    const count=Math.min(8,Math.max(2,Math.ceil(path[0].distanceTo(path[path.length-1])/4)+1));
-    for(let i=0;i<count;i++){const index=Math.round(i*(path.length-1)/(count-1));addManualWaypoint(path[index])}
-    if(manualWaypoints.length>=2){manualRouteActive=true;$('mapStatus').textContent='✅ Trazo convertido en '+manualWaypoints.length+' puntos de paso. Pulsa «Generar ruta» para ajustarla a las carreteras.';}
+    for(const point of sampled)addManualWaypoint(point);
+    if(manualWaypoints.length>=2){manualRouteActive=true;$('mapStatus').textContent='✅ Trazo de '+totalKm.toFixed(1)+' km convertido en '+manualWaypoints.length+' puntos de paso. Pulsa «Generar ruta» para ajustarla a las carreteras.';}
     else{$('mapStatus').textContent='⚠️ No se pudieron usar esos puntos. Comprueba que el trazo está dentro de la zona seleccionada.'}
   };
   el.addEventListener('pointerup',finish,true);el.addEventListener('pointercancel',finish,true);
