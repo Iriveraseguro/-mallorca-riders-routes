@@ -653,25 +653,55 @@ async function findRealStops(coords,stop){
     }
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1500,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:20];('+clauses+');out center tags;';
-    // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='/overpass';
-    let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),40000);
+    // Consultamos primero desde el navegador del usuario. Algunos servidores
+    // públicos de Overpass limitan peticiones originadas en centros de datos;
+    // una petición directa evita que todas salgan desde el Worker de Cloudflare.
+    let data=null,lastError='Los servidores de OpenStreetMap no responden.';
+    const directEndpoints=[
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.private.coffee/api/interpreter'
+    ];
+    const attempts=directEndpoints.map(async endpoint=>{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+      try{
+        const res=await fetch(endpoint,{
+          method:'POST',
+          headers:{Accept:'application/json'},
+          body:new URLSearchParams({data:query}),
+          signal:controller.signal
+        });
+        if(!res.ok)throw new Error('OpenStreetMap HTTP '+res.status);
+        const json=await res.json();
+        if(!Array.isArray(json.elements))throw new Error('respuesta no válida de OpenStreetMap');
+        return json;
+      }finally{clearTimeout(timer)}
+    });
     try{
-      const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
-      if(!res.ok){
-        let detail='';
+      data=await Promise.any(attempts);
+    }catch(error){
+      const reasons=error?.errors||[];
+      lastError=reasons.some(e=>e?.name==='AbortError')
+        ?'Los servidores públicos de OpenStreetMap han tardado demasiado.'
+        :(reasons.find(e=>e?.message)?.message||lastError);
+      // Si el navegador bloquea las peticiones directas por CORS, recurrimos al Worker.
+      if(reasons.some(e=>e instanceof TypeError||/fetch|network|cors/i.test(String(e?.message||'')))){
+        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),39000);
         try{
-          const errData=await res.json();
-          detail=errData.detail||errData.error||'';
-        }catch(_){}
-        throw new Error('HTTP '+res.status+(detail?' — '+detail:''));
+          const res=await fetch('/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+          const json=await res.json();
+          if(!res.ok)throw new Error(json.error||json.detail||('HTTP '+res.status));
+          if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
+          data=json;
+        }catch(fallbackError){
+          if(fallbackError?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado el tiempo de espera.');
+          throw new Error(String(fallbackError?.message||lastError));
+        }finally{clearTimeout(timer)}
+      }else{
+        throw new Error(lastError);
       }
-      const json=await res.json();
-      if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
-      data=json;
-    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 40 segundos');throw error}finally{clearTimeout(timer)}
-    if(!data)throw new Error('sin respuesta del servidor');
+    }
+    if(!data)throw new Error(lastError);
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
     const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=3).sort((a,b)=>a.distanceKm-b.distanceKm);
