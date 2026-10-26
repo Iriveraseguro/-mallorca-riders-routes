@@ -3,6 +3,33 @@ const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/route") {
+      const headers = {
+        "Access-Control-Allow-Origin": url.origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Accept",
+        "Vary": "Origin",
+        "Cache-Control": "no-store"
+      };
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+      if (request.method !== "POST") return Response.json({ error: "Método no permitido." }, { status: 405, headers });
+      const body = await request.text();
+      if (!body || body.length > 100000) return Response.json({ error: "Petición de ruta no válida." }, { status: 400, headers });
+      try {
+        const upstream = await fetch("https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body
+        });
+        const responseBody = await upstream.text();
+        return new Response(responseBody, {
+          status: upstream.status,
+          headers: { ...headers, "Content-Type": upstream.headers.get("Content-Type") || "application/json" }
+        });
+      } catch (error) {
+        return Response.json({ error: "No se pudo conectar con el motor de rutas.", detail: String(error?.message || error) }, { status: 502, headers });
+      }
+    }
     if (url.pathname === "/overpass") {
       const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type, Accept","Vary":"Origin","Cache-Control":"no-store"};
       if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
