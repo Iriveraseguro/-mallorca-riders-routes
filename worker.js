@@ -15,19 +15,39 @@ export default {
       if (request.method !== "POST") return Response.json({ error: "Método no permitido." }, { status: 405, headers });
       const body = await request.text();
       if (!body || body.length > 100000) return Response.json({ error: "Petición de ruta no válida." }, { status: 400, headers });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 25000);
       try {
-        const upstream = await fetch("https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/", {
+        // Llamamos directamente al servicio público de Valhalla. La antigua
+        // URL intermedia mallorca-riders-proxy-test ya no resuelve la ruta y
+        // devolvía 404 al intentar calcular recorridos.
+        const upstream = await fetch("https://valhalla1.openstreetmap.de/route", {
           method: "POST",
           headers: { "Content-Type": "application/json", "Accept": "application/json" },
-          body
+          body,
+          signal: controller.signal
         });
         const responseBody = await upstream.text();
-        return new Response(responseBody, {
-          status: upstream.status,
-          headers: { ...headers, "Content-Type": upstream.headers.get("Content-Type") || "application/json" }
-        });
+        if (!upstream.ok) {
+          return Response.json({
+            error: "El motor de rutas ha respondido con un error.",
+            detail: "Valhalla HTTP " + upstream.status,
+            upstream_status: upstream.status
+          }, { status: 502, headers });
+        }
+        let payload;
+        try { payload = JSON.parse(responseBody); }
+        catch {
+          return Response.json({ error: "El motor de rutas devolvió una respuesta no válida." }, { status: 502, headers });
+        }
+        return Response.json(payload, { headers });
       } catch (error) {
-        return Response.json({ error: "No se pudo conectar con el motor de rutas.", detail: String(error?.message || error) }, { status: 502, headers });
+        const detail = error?.name === "AbortError"
+          ? "El motor de rutas ha tardado demasiado."
+          : String(error?.message || error);
+        return Response.json({ error: "No se pudo conectar con el motor de rutas.", detail }, { status: 502, headers });
+      } finally {
+        clearTimeout(timer);
       }
     }
     if (url.pathname === "/overpass") {
