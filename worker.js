@@ -58,7 +58,7 @@ export default {
       if (!query || query.length > 30000 || !/^\s*\[out:json\]/i.test(query) || !/\bout\s+center\s+tags\s*;/i.test(query)) return Response.json({error:"Consulta de mapa no válida."},{status:400,headers});
       let lastError="Los servicios de OpenStreetMap no responden.";
       for (const endpoint of OVERPASS_ENDPOINTS) {
-        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),7000);
+        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
         try {
           const response=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},body:new URLSearchParams({data:query}).toString(),signal:controller.signal});
           const body=await response.text();
