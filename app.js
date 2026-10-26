@@ -999,8 +999,13 @@ function beginScreenshotAlignment(){
 function handleScreenshotImageClick(event){
   if(screenshotCalibrationStage!=='image')return;
   const img=$('routeScreenshotPreview'),rect=img.getBoundingClientRect();
-  const x=Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width));
-  const y=Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height));
+  // Convert clicks against the actual image pixels, excluding any letterbox space
+  // created by object-fit:contain on tall/wide screenshots.
+  const scale=Math.min(rect.width/img.naturalWidth,rect.height/img.naturalHeight);
+  const renderedW=img.naturalWidth*scale,renderedH=img.naturalHeight*scale;
+  const left=rect.left+(rect.width-renderedW)/2,top=rect.top+(rect.height-renderedH)/2;
+  const x=Math.max(0,Math.min(1,(event.clientX-left)/renderedW));
+  const y=Math.max(0,Math.min(1,(event.clientY-top)/renderedH));
   screenshotImagePoints.push({x,y});
   if(screenshotImagePoints.length===1){
     $('routeTraceStatus').textContent='Punto 1 guardado. Ahora toca un segundo punto claramente reconocible, situado más abajo y a la derecha que el primero.';
