@@ -632,8 +632,7 @@ function stopIcon(stop){
 async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    // Consulta ligera: tres puntos de la ruta, radio moderado y una sola petición al Worker.
-    // Evitamos lanzar varias peticiones simultáneas a los servidores públicos de Overpass.
+    // Consulta ligera: tres puntos de la ruta y radio moderado.
     const sampleCount=Math.min(3,Math.max(3,Math.ceil(coords.length/180)));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
@@ -643,25 +642,32 @@ async function findRealStops(coords,stop){
     }
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1200,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:12];('+clauses+');out center tags;';
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),34000);
-    let data;
-    try{
-      const res=await fetch('/overpass',{
-        method:'POST',
-        headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},
-        body:query,
-        signal:controller.signal
-      });
-      let json={};
-      try{json=await res.json()}catch(_){}
-      if(!res.ok)throw new Error(json.error||json.detail||('HTTP '+res.status));
-      if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
-      data=json;
-    }catch(error){
-      if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado el tiempo de espera.');
-      throw new Error(String(error?.message||error||'No se pudo conectar con OpenStreetMap.'));
-    }finally{clearTimeout(timer)}
-    if(!data)throw new Error('OpenStreetMap no devolvió resultados.');
+    const endpoints=[
+      '/overpass',
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter'
+    ];
+    let data=null,lastError='Los servicios de OpenStreetMap no responden.';
+    for(const endpoint of endpoints){
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),endpoint==='/overpass'?26000:6500);
+      try{
+        const isProxy=endpoint==='/overpass';
+        const res=await fetch(endpoint,{
+          method:'POST',
+          headers:{'Content-Type':isProxy?'text/plain;charset=UTF-8':'application/x-www-form-urlencoded;charset=UTF-8',Accept:'application/json'},
+          body:isProxy?query:new URLSearchParams({data:query}).toString(),
+          signal:controller.signal
+        });
+        let json={};try{json=await res.json()}catch(_){}
+        if(!res.ok){lastError=(json.error||json.detail||('HTTP '+res.status));continue}
+        if(!Array.isArray(json.elements)){lastError='OpenStreetMap devolvió una respuesta no válida.';continue}
+        data=json;break;
+      }catch(error){
+        lastError=error?.name==='AbortError'?'La búsqueda de establecimientos ha superado el tiempo de espera.':String(error?.message||error||'No se pudo conectar con OpenStreetMap.');
+        console.warn('Falló la búsqueda de establecimientos mediante '+endpoint,lastError);
+      }finally{clearTimeout(timer)}
+    }
+    if(!data)throw new Error(lastError);
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
     const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=3).sort((a,b)=>a.distanceKm-b.distanceKm);
