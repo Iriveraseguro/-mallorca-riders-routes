@@ -653,9 +653,8 @@ async function findRealStops(coords,stop){
     }
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1500,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:20];('+clauses+');out center tags;';
-    // Consultamos primero desde el navegador del usuario. Algunos servidores
-    // públicos de Overpass limitan peticiones originadas en centros de datos;
-    // una petición directa evita que todas salgan desde el Worker de Cloudflare.
+    // Intentamos primero los servicios públicos desde el navegador. Si cualquiera falla
+    // (CORS, límite de peticiones, HTTP 429/502 o timeout), probamos también el Worker.
     let data=null,lastError='Los servidores de OpenStreetMap no responden.';
     const directEndpoints=[
       'https://overpass.kumi.systems/api/interpreter',
@@ -684,22 +683,25 @@ async function findRealStops(coords,stop){
       lastError=reasons.some(e=>e?.name==='AbortError')
         ?'Los servidores públicos de OpenStreetMap han tardado demasiado.'
         :(reasons.find(e=>e?.message)?.message||lastError);
-      // Si el navegador bloquea las peticiones directas por CORS, recurrimos al Worker.
-      if(reasons.some(e=>e instanceof TypeError||/fetch|network|cors/i.test(String(e?.message||'')))){
-        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),39000);
-        try{
-          const res=await fetch('/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
-          const json=await res.json();
-          if(!res.ok)throw new Error(json.error||json.detail||('HTTP '+res.status));
-          if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
-          data=json;
-        }catch(fallbackError){
-          if(fallbackError?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado el tiempo de espera.');
-          throw new Error(String(fallbackError?.message||lastError));
-        }finally{clearTimeout(timer)}
-      }else{
-        throw new Error(lastError);
-      }
+      // No abandonamos la búsqueda por un HTTP 429/502: el Worker tiene su propia
+      // cadena de servidores alternativos y puede responder aunque falle el navegador.
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),39000);
+      try{
+        const res=await fetch('/overpass',{
+          method:'POST',
+          headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},
+          body:query,
+          signal:controller.signal
+        });
+        let json={};
+        try{json=await res.json()}catch(_){}
+        if(!res.ok)throw new Error(json.error||json.detail||('HTTP '+res.status));
+        if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
+        data=json;
+      }catch(fallbackError){
+        if(fallbackError?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado el tiempo de espera.');
+        throw new Error(String(fallbackError?.message||lastError));
+      }finally{clearTimeout(timer)}
     }
     if(!data)throw new Error(lastError);
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
