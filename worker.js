@@ -58,18 +58,24 @@ export default {
       if (!query || query.length > 30000 || !/^\s*\[out:json\]/i.test(query) || !/\bout\s+center\s+tags\s*;/i.test(query)) return Response.json({error:"Consulta de mapa no válida."},{status:400,headers});
       let lastError="Los servicios de OpenStreetMap no responden.";
       for (const endpoint of OVERPASS_ENDPOINTS) {
+        const startedAt=Date.now();
         const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
         try {
+          console.info("[overpass] intentando", endpoint);
           const response=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},body:new URLSearchParams({data:query}).toString(),signal:controller.signal});
           const body=await response.text();
-          if(!response.ok){lastError="OpenStreetMap respondió HTTP "+response.status+".";continue}
-          let payload;try{payload=JSON.parse(body)}catch{lastError="Respuesta no válida de OpenStreetMap.";continue}
-          if(!Array.isArray(payload.elements)){lastError="La respuesta de OpenStreetMap no contiene establecimientos.";continue}
+          console.info("[overpass] respuesta", endpoint, "status", response.status, "ms", Date.now()-startedAt, "bytes", body.length);
+          if(!response.ok){lastError="OpenStreetMap respondió HTTP "+response.status+".";console.warn("[overpass] endpoint rechazado",endpoint,response.status);continue}
+          let payload;try{payload=JSON.parse(body)}catch{lastError="Respuesta no válida de OpenStreetMap.";console.warn("[overpass] JSON inválido",endpoint);continue}
+          if(!Array.isArray(payload.elements)){lastError="La respuesta de OpenStreetMap no contiene establecimientos.";console.warn("[overpass] falta elements",endpoint);continue}
+          console.info("[overpass] éxito",endpoint,"establecimientos",payload.elements.length);
           return Response.json(payload,{headers});
         } catch(error) {
           lastError=error?.name==="AbortError"?"La búsqueda de OpenStreetMap ha tardado demasiado.":"No se pudo conectar con OpenStreetMap.";
+          console.warn("[overpass] fallo",endpoint,"ms",Date.now()-startedAt,"tipo",error?.name,"detalle",String(error?.message||error));
         } finally {clearTimeout(timer)}
       }
+      console.error("[overpass] fallaron todos los endpoints",lastError);
       return Response.json({error:lastError},{status:502,headers});
     }
     if (url.pathname === "/api/resolve-google") {
