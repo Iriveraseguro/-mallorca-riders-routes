@@ -632,26 +632,28 @@ function stopIcon(stop){
 async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    // Consulta ligera: tres puntos de la ruta y radio moderado.
-    const sampleCount=Math.min(3,Math.max(3,Math.ceil(coords.length/180)));
+    // Consulta más pequeña para evitar que Overpass agote el tiempo de espera.
+    const sampleCount=Math.min(2,coords.length);
     const samples=[];
     for(let i=0;i<sampleCount;i++){
-      const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
+      const p=coords[Math.round(i*(coords.length-1)/Math.max(1,sampleCount-1))];
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1200,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:12];('+clauses+');out center tags;';
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:700,'+p.lat+','+p.lon+');')).join('');
+    const query='[out:json][timeout:8];('+clauses+');out center tags;';
     const endpoints=[
-      '/overpass',
+      'https://overpass.kumi.systems/api/interpreter',
       'https://overpass-api.de/api/interpreter',
-      'https://overpass.kumi.systems/api/interpreter'
+      'https://overpass.private.coffee/api/interpreter',
+      'https://overpass.nchc.org.tw/api/interpreter',
+      '/overpass'
     ];
     let data=null,lastError='Los servicios de OpenStreetMap no responden.';
     for(const endpoint of endpoints){
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),endpoint==='/overpass'?26000:6500);
+      const isProxy=endpoint==='/overpass';
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),isProxy?9000:5000);
       try{
-        const isProxy=endpoint==='/overpass';
         const res=await fetch(endpoint,{
           method:'POST',
           headers:{'Content-Type':isProxy?'text/plain;charset=UTF-8':'application/x-www-form-urlencoded;charset=UTF-8',Accept:'application/json'},
