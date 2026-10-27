@@ -1,5 +1,10 @@
 const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","google.com","maps.google.com"]);
-const OVERPASS_ENDPOINTS = ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
+const OVERPASS_ENDPOINTS = [
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass.nchc.org.tw/api/interpreter"
+];
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -18,9 +23,6 @@ export default {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 25000);
       try {
-        // Llamamos directamente al servicio público de Valhalla. La antigua
-        // URL intermedia mallorca-riders-proxy-test ya no resuelve la ruta y
-        // devolvía 404 al intentar calcular recorridos.
         const upstream = await fetch("https://valhalla1.openstreetmap.de/route", {
           method: "POST",
           headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -56,30 +58,55 @@ export default {
       if (request.method !== "POST") return Response.json({error:"Método no permitido."},{status:405,headers});
       const query = await request.text();
       if (!query || query.length > 30000 || !/^\s*\[out:json\]/i.test(query) || !/\bout\s+center\s+tags\s*;/i.test(query)) return Response.json({error:"Consulta de mapa no válida."},{status:400,headers});
-      let lastError="Los servicios de OpenStreetMap no responden.";
+      let lastError = "Los servicios de OpenStreetMap no responden.";
       for (const endpoint of OVERPASS_ENDPOINTS) {
-        const startedAt=Date.now();
-        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        // Four short attempts keep the request below Cloudflare's wall-time limit.
+        const timer = setTimeout(() => controller.abort(), 5500);
         try {
           console.info("[overpass] intentando", endpoint);
-          const response=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},body:new URLSearchParams({data:query}).toString(),signal:controller.signal});
-          const body=await response.text();
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json"},
+            body: new URLSearchParams({data:query}).toString(),
+            signal: controller.signal
+          });
+          const body = await response.text();
           console.info("[overpass] respuesta", endpoint, "status", response.status, "ms", Date.now()-startedAt, "bytes", body.length);
-          if(!response.ok){lastError="OpenStreetMap respondió HTTP "+response.status+".";console.warn("[overpass] endpoint rechazado",endpoint,response.status);continue}
-          let payload;try{payload=JSON.parse(body)}catch{lastError="Respuesta no válida de OpenStreetMap.";console.warn("[overpass] JSON inválido",endpoint);continue}
-          if(!Array.isArray(payload.elements)){lastError="La respuesta de OpenStreetMap no contiene establecimientos.";console.warn("[overpass] falta elements",endpoint);continue}
-          console.info("[overpass] éxito",endpoint,"establecimientos",payload.elements.length);
+          if (!response.ok) {
+            lastError = "OpenStreetMap respondió HTTP " + response.status + ".";
+            console.warn("[overpass] endpoint rechazado", endpoint, response.status);
+            continue;
+          }
+          let payload;
+          try { payload = JSON.parse(body); }
+          catch {
+            lastError = "Respuesta no válida de OpenStreetMap.";
+            console.warn("[overpass] JSON inválido", endpoint);
+            continue;
+          }
+          if (!Array.isArray(payload.elements)) {
+            lastError = "La respuesta de OpenStreetMap no contiene establecimientos.";
+            console.warn("[overpass] falta elements", endpoint);
+            continue;
+          }
+          console.info("[overpass] éxito", endpoint, "establecimientos", payload.elements.length);
           return Response.json(payload,{headers});
-        } catch(error) {
-          lastError=error?.name==="AbortError"?"La búsqueda de OpenStreetMap ha tardado demasiado.":"No se pudo conectar con OpenStreetMap.";
-          console.warn("[overpass] fallo",endpoint,"ms",Date.now()-startedAt,"tipo",error?.name,"detalle",String(error?.message||error));
-        } finally {clearTimeout(timer)}
+        } catch (error) {
+          lastError = error?.name === "AbortError"
+            ? "La búsqueda de OpenStreetMap ha tardado demasiado."
+            : "No se pudo conectar con OpenStreetMap.";
+          console.warn("[overpass] fallo", endpoint, "ms", Date.now()-startedAt, "tipo", error?.name, "detalle", String(error?.message||error));
+        } finally {
+          clearTimeout(timer);
+        }
       }
-      console.error("[overpass] fallaron todos los endpoints",lastError);
+      console.error("[overpass] fallaron todos los endpoints", lastError);
       return Response.json({error:lastError},{status:502,headers});
     }
     if (url.pathname === "/api/resolve-google") {
-      const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
+      const headers = {"Access-Control-Allow-Origin":url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
       if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
       if (request.method !== "GET") return Response.json({error:"Método no permitido."},{status:405,headers});
       const raw=url.searchParams.get("url");
