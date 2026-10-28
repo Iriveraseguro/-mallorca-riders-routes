@@ -1,4 +1,6 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
+let screenshotCalibrationStage=null,screenshotImagePoints=[],screenshotMapPoints=[],screenshotOverlay=null,screenshotCalibrationZoom=null,screenshotMoveMode=false;
+let freehandDrawMode=false,freehandDrawing=false,freehandPath=[],freehandLine=null;
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -9,7 +11,8 @@ function initMap(){
   try{
     map=L.map(el,{zoomControl:true,preferCanvas:true}).setView([39.62,2.95],10);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
-    map.on('click',e=>{if(manualMode)addManualWaypoint(e.latlng);});
+    map.on('click',e=>{if(screenshotCalibrationStage==='map'){handleScreenshotMapClick(e.latlng);return}if(manualMode&&!freehandDrawMode)addManualWaypoint(e.latlng);});
+    installFreehandDrawing();
     setTimeout(()=>map&&map.invalidateSize(),50);
     return map;
   }catch(err){
@@ -80,7 +83,7 @@ $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latit
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
 const APP_VERSION='v5.3';
-const VALHALLA_URL='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev';
+const VALHALLA_URL='/api/route';
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
 function destinationPoint(lat,lon,distanceKm,bearingDeg){
@@ -160,7 +163,54 @@ function addManualWaypoint(latlng){
 }
 function startManualRoute(){manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
 function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
-function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
+function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');if(freehandLine&&map){map.removeLayer(freehandLine);freehandLine=null}freehandDrawMode=false;freehandDrawing=false;if(map&&map.dragging)map.dragging.enable();$('map').classList.remove('draw-active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
+function installFreehandDrawing(){
+  const el=$('map');if(!el||el.dataset.freehandReady)return;el.dataset.freehandReady='1';
+  el.addEventListener('pointerdown',e=>{
+    if(!freehandDrawMode||e.button!==0)return;
+    e.preventDefault();e.stopPropagation();freehandDrawing=true;freehandPath=[map.mouseEventToLatLng(e)];
+    if(freehandLine&&map)map.removeLayer(freehandLine);
+    freehandLine=L.polyline(freehandPath,{color:'#087cff',weight:5,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map);
+    try{el.setPointerCapture(e.pointerId)}catch(_){}
+  },true);
+  el.addEventListener('pointermove',e=>{
+    if(!freehandDrawMode||!freehandDrawing)return;
+    e.preventDefault();const p=map.mouseEventToLatLng(e),last=freehandPath[freehandPath.length-1];
+    if(!last||map.latLngToContainerPoint(last).distanceTo(map.latLngToContainerPoint(p))>=8){freehandPath.push(p);freehandLine.setLatLngs(freehandPath)}
+  },true);
+  const finish=e=>{
+    if(!freehandDrawing)return;e.preventDefault();freehandDrawing=false;
+    if(map&&map.dragging)map.dragging.enable();el.classList.remove('draw-active');
+    const path=freehandPath.slice();freehandDrawMode=false;manualMode=false;$('manualMode').classList.remove('active');
+    // Medir el recorrido completo, no solo la distancia entre el inicio y el final:
+    // así también se admiten trazos curvos y circuitos que terminan cerca del inicio.
+    if(path.length<2){$('mapStatus').textContent='⚠️ El trazo es demasiado corto. Activa «Dibujar ruta a mano» y dibuja una línea más larga.';return}
+    const cumulative=[0];let totalKm=0;
+    for(let i=1;i<path.length;i++){totalKm+=path[i-1].distanceTo(path[i])/1000;cumulative.push(totalKm)}
+    if(totalKm<0.25){$('mapStatus').textContent='⚠️ El trazo es demasiado corto. Acércate al mapa y dibuja un recorrido más largo.';return}
+    const count=Math.min(8,Math.max(2,Math.ceil(totalKm/4)+1)),sampled=[];
+    for(let i=0;i<count;i++){
+      const target=totalKm*i/(count-1);let j=1;
+      while(j<cumulative.length-1&&cumulative[j]<target)j++;
+      const span=cumulative[j]-cumulative[j-1],t=span?(target-cumulative[j-1])/span:0;
+      const a=path[j-1],b=path[j];
+      sampled.push(L.latLng(a.lat+(b.lat-a.lat)*t,a.lng+(b.lng-a.lng)*t));
+    }
+    manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];
+    for(const point of sampled)addManualWaypoint(point);
+    if(manualWaypoints.length>=2){manualRouteActive=true;$('mapStatus').textContent='✅ Trazo de '+totalKm.toFixed(1)+' km convertido en '+manualWaypoints.length+' puntos de paso. Pulsa «Generar ruta» para ajustarla a las carreteras.';}
+    else{$('mapStatus').textContent='⚠️ No se pudieron usar esos puntos. Comprueba que el trazo está dentro de la zona seleccionada.'}
+  };
+  el.addEventListener('pointerup',finish,true);el.addEventListener('pointercancel',finish,true);
+}
+function startFreehandDrawing(){
+  if(!initMap())return;
+  freehandDrawMode=true;freehandDrawing=false;freehandPath=[];manualMode=false;manualRouteActive=false;
+  $('manualMode').classList.remove('active');$('map').classList.add('draw-active');$('map').style.touchAction='none';
+  if(map.dragging)map.dragging.disable();
+  $('mapStatus').textContent='✏️ Dibuja con el dedo o ratón sobre el mapa siguiendo la ruta aproximada. Al soltar, se crearán puntos de paso.';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
 
 const PENINSULA={
   barcelona:{name:'Barcelona',lat:41.3874,lon:2.1686,targets:{Mixta:[41.73,2.25],Curvas:[41.65,2.45],Costa:[41.96,3.20],Montaña:[42.15,2.52]}},
@@ -335,12 +385,16 @@ function initApp(){
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
+  $('alignScreenshotButton').onclick=beginScreenshotAlignment;
+  $('showScreenshotOnMapButton').onclick=showScreenshotOnMap;
+  $('moveScreenshotButton').onclick=toggleScreenshotMoveMode;
+  $('traceScreenshotButton').onclick=startFreehandDrawing;
+  $('screenshotOpacity').oninput=e=>{if(screenshotOverlay)screenshotOverlay.setOpacity(Number(e.target.value)/100)};
   $('screenshotImportAlternatives').onclick=()=>{
     const panel=$('importRoutePanel');
     if(panel){panel.classList.remove('hidden');panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink')?.focus({preventScroll:true});}
     $('mapStatus').textContent='🆓 Importación sin costes: pega un enlace de indicaciones de Google Maps o selecciona un archivo GPX/KML/GeoJSON. La captura por sí sola no aporta coordenadas GPS.';
   };
-  $('traceScreenshotButton').onclick=()=>{startManualRoute();$('mapStatus').textContent='👆 Modo manual: toca en el mapa los puntos del recorrido en orden. Esta opción no es automática.';$('map').scrollIntoView({behavior:'smooth',block:'center'})};
   $('loadMapsLinkButton').onclick=loadGoogleMapsLink;
 
   if(!initMap()){
@@ -348,6 +402,7 @@ function initApp(){
     return;
   }
   $('manualMode').onclick=()=>manualMode?finishManualRoute():startManualRoute();
+  $('drawRouteButton').onclick=startFreehandDrawing;
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('refreshApp').onclick=refreshApplication;
@@ -522,9 +577,13 @@ function routeShapeIsInRegion(coords,region,geometry){
   return false;
 }
 function poiQueryForStop(stop){
+  // El filtro espacial se inserta ANTES de las etiquetas al construir la consulta
+  // Overpass QL: node(around:...)[amenity=...]; es la forma más compatible.
   if(stop==='all')return [
     'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
   ];
   if(stop.includes('Restaurante'))return [
     'node["amenity"~"^(restaurant|fast_food)$"]',
@@ -538,17 +597,13 @@ function poiQueryForStop(stop){
     'node["amenity"="fuel"]',
     'way["amenity"="fuel"]'
   ];
+  if(stop.includes('Mirador'))return [
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
+  ];
   return [];
 }
 
-function placeCategory(tags){
-  if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
-  if(tags.amenity==='fuel')return {name:'Gasolinera',emoji:'⛽',color:'#f97316'};
-  if(tags.amenity==='cafe')return {name:'Cafetería',emoji:'☕',color:'#f59e0b'};
-  if(tags.amenity==='bar'||tags.amenity==='pub')return {name:'Bar',emoji:'🍺',color:'#3b82f6'};
-  if(tags.amenity==='restaurant'||tags.amenity==='fast_food')return {name:'Restaurante',emoji:'🍽️',color:'#ef4444'};
-  return {name:'Establecimiento',emoji:'📍',color:'#64748b'};
-}
 function placeCategory(tags){
   if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
   if(tags.amenity==='fuel')return {name:'Gasolinera',emoji:'⛽',color:'#f97316'};
@@ -584,21 +639,35 @@ function stopIcon(stop){
 async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
-    // un rectángulo enorme que incluye mucha zona ajena a la ruta.
-   const sampleCount=3;
+    // Muestreamos a lo largo de TODA la ruta según distancia real, no solo
+    // en el inicio y el final. Así no se pierden pueblos y establecimientos intermedios.
+    let routeKm=0;
+    const cumulative=[0];
+    for(let i=1;i<coords.length;i++){
+      routeKm+=distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
+      cumulative.push(routeKm);
+    }
+    const sampleCount=Math.max(4,Math.min(18,Math.ceil(routeKm/6)+1));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
-      const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
+      const target=routeKm*i/(sampleCount-1);
+      let index=0;
+      while(index<cumulative.length-1&&cumulative[index]<target)index++;
+      const p=coords[index];
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:8];('+clauses+');out center tags;';
+    // Consulta cada muestra usando la sintaxis Overpass QL más compatible:
+    // el filtro around va antes de los filtros por etiquetas.
+    const clauses=samples.flatMap(p=>selector.map(q=>{
+      const match=q.match(/^(node|way)(.*)$/);
+      return match?match[1]+'(around:1800,'+p.lat+','+p.lon+')'+match[2]+';':'';
+    })).join('');
+    const query='[out:json][timeout:25];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
+    const endpoint='/overpass';
     let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
     try{
       const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
@@ -612,7 +681,7 @@ async function findRealStops(coords,stop){
       const json=await res.json();
       if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
       data=json;
-    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 16 segundos');throw error}finally{clearTimeout(timer)}
+    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha agotado el tiempo de espera');throw error}finally{clearTimeout(timer)}
     if(!data)throw new Error('sin respuesta del servidor');
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
@@ -673,8 +742,8 @@ async function requestRoute(locations,plan){
 }
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
-    $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Para no dibujar una ruta en otra zona, importa un enlace/archivo de ruta o pulsa «Marcar puntos manualmente» y coloca al menos 2 puntos sobre el mapa.';
-    $('routeTraceStatus').textContent='La línea azul se ha detectado visualmente, pero aún no está geolocalizada. Usa un enlace/GPX o coloca puntos en el mapa para generar una ruta fiable.';
+    $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Pulsa «✏️ Dibujar recorrido» y dibuja la línea directamente sobre el mapa, o importa un enlace/archivo de ruta.';
+    $('routeTraceStatus').textContent='La captura es una referencia visual, no una ruta GPS. Puedes dibujar el recorrido directamente sobre el mapa; la app convertirá el trazo en puntos de paso.';
     $('map').scrollIntoView({behavior:'smooth',block:'center'});
     return;
   }
@@ -886,13 +955,34 @@ function maps(){
 let screenshotObjectUrl=null,screenshotReferenceActive=false;
 async function showRouteScreenshot(file){
   if(!file)return;
-  if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
+  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);if(!isPdf&&!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG, WEBP o un PDF.');return}
   // Desde que se elige una captura, bloquear la generación normal hasta cerrar
   // el panel o elegir puntos geográficos reales; incluso si falla la detección.
-  if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
-  screenshotObjectUrl=URL.createObjectURL(file);
-  $('routeScreenshotPreview').src=screenshotObjectUrl;
+  if(screenshotObjectUrl&&screenshotObjectUrl.startsWith('blob:'))URL.revokeObjectURL(screenshotObjectUrl);
+  screenshotObjectUrl=null;
+  const preview=$('routeScreenshotPreview');
+  if(isPdf){
+    try{
+      if(!window.pdfjsLib)throw new Error('No se ha cargado el lector PDF. Comprueba la conexión y vuelve a intentarlo.');
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const pdf=await window.pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+      const page=await pdf.getPage(1),viewport=page.getViewport({scale:1.6});
+      const pdfCanvas=document.createElement('canvas');
+      pdfCanvas.width=Math.ceil(viewport.width);pdfCanvas.height=Math.ceil(viewport.height);
+      await page.render({canvasContext:pdfCanvas.getContext('2d'),viewport}).promise;
+      screenshotObjectUrl=pdfCanvas.toDataURL('image/png');
+      preview.src=screenshotObjectUrl;
+    }catch(error){alert('No he podido abrir el PDF. '+(error?.message||''));return}
+  }else{
+    screenshotObjectUrl=URL.createObjectURL(file);
+    preview.src=screenshotObjectUrl;
+  }
   $('routeScreenshotName').textContent=file.name;
+  screenshotReferenceActive=true;
+  screenshotCalibrationStage=null;screenshotImagePoints=[];screenshotMapPoints=[];
+  if(screenshotOverlay&&map){map.removeLayer(screenshotOverlay);screenshotOverlay=null}
+  $('alignScreenshotButton').disabled=false;
+  $('screenshotOpacity').value='65';
   $('routeScreenshotPanel').classList.remove('hidden');
   const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas'),img=$('routeScreenshotPreview');
   canvas.classList.add('hidden');canvas.style.display='none';
@@ -960,11 +1050,150 @@ async function showRouteScreenshot(file){
     $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
   }
 }
+function toggleScreenshotMoveMode(){
+  if(!screenshotOverlay||!map){$('routeTraceStatus').textContent='Primero muestra la captura encima del mapa.';return}
+  screenshotMoveMode=!screenshotMoveMode;
+  const button=$('moveScreenshotButton');
+  button.textContent=screenshotMoveMode?'✅ Terminar de mover captura':'↔️ Mover captura para encajarla';
+  button.classList.toggle('primary',screenshotMoveMode);
+  button.classList.toggle('map-button',!screenshotMoveMode);
+  const el=screenshotOverlay.getElement();
+  if(el){el.style.pointerEvents=screenshotMoveMode?'auto':'none';el.style.cursor=screenshotMoveMode?'move':'default';el.style.touchAction=screenshotMoveMode?'none':''}
+  $('routeTraceStatus').textContent=screenshotMoveMode
+    ?'MODO MOVER: arrastra la captura con el ratón o el dedo hasta encajar las carreteras. Cuando esté bien colocada, pulsa «Terminar de mover captura» y después podrás dibujar los puntos.'
+    :'Captura fijada en esta posición. Ya puedes dibujar la ruta a mano sobre el mapa.';
+}
+function enableScreenshotOverlayDragging(){
+  if(!screenshotOverlay||!map)return;
+  const el=screenshotOverlay.getElement();
+  if(!el||el.dataset.dragReady==='1')return;
+  el.dataset.dragReady='1';el.style.pointerEvents=screenshotMoveMode?'auto':'none';el.style.touchAction='none';
+  let drag=null;
+  el.addEventListener('pointerdown',event=>{
+    if(!screenshotMoveMode)return;
+    event.preventDefault();event.stopPropagation();
+    const z=map.getZoom(),bounds=screenshotOverlay.getBounds();
+    drag={pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,z,
+      nw:map.project(bounds.getNorthWest(),z),se:map.project(bounds.getSouthEast(),z)};
+    if(el.setPointerCapture)el.setPointerCapture(event.pointerId);
+    map.dragging.disable();
+  });
+  el.addEventListener('pointermove',event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    event.preventDefault();event.stopPropagation();
+    const dx=event.clientX-drag.startX,dy=event.clientY-drag.startY;
+    const nw=map.unproject([drag.nw.x+dx,drag.nw.y+dy],drag.z);
+    const se=map.unproject([drag.se.x+dx,drag.se.y+dy],drag.z);
+    screenshotOverlay.setBounds(L.latLngBounds(nw,se));
+  });
+  const finish=event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    event.preventDefault();event.stopPropagation();drag=null;
+    map.dragging.enable();
+  };
+  el.addEventListener('pointerup',finish);
+  el.addEventListener('pointercancel',finish);
+}
+function showScreenshotOnMap(){
+  if(!screenshotObjectUrl||!$('routeScreenshotPreview').naturalWidth){$('routeTraceStatus').textContent='Primero selecciona una captura JPG, PNG o PDF.';return}
+  if(!initMap()){$('routeTraceStatus').textContent='El mapa aún no está listo. Inténtalo de nuevo.';return}
+  map.invalidateSize();
+  const size=map.getSize(),img=$('routeScreenshotPreview');
+  const imageRatio=img.naturalWidth/img.naturalHeight;
+  let w=size.x,h=size.y;
+  if(w/h>imageRatio)w=h*imageRatio;else h=w/imageRatio;
+  const center=map.getSize().divideBy(2);
+  const topLeft=map.containerPointToLatLng([center.x-w/2,center.y-h/2]);
+  const bottomRight=map.containerPointToLatLng([center.x+w/2,center.y+h/2]);
+  const bounds=L.latLngBounds(topLeft,bottomRight);
+  if(screenshotOverlay)map.removeLayer(screenshotOverlay);
+  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:true}).addTo(map);
+  enableScreenshotOverlayDragging();
+  screenshotOverlay.bringToFront();
+  $('routeTraceStatus').textContent='✅ La captura ya está encima del mapa. Ajusta la transparencia. Para colocarla con precisión, pulsa «Alinear captura con mapa» y marca dos cruces en la imagen y las mismas dos en el mapa.';
+  $('mapStatus').textContent='📸 Captura superpuesta como referencia. No está geolocalizada todavía: alinéala con dos cruces para hacerla coincidir con las carreteras.';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function beginScreenshotAlignment(){
+  if(!$('routeScreenshotPreview').src){$('routeTraceStatus').textContent='Primero selecciona una captura.';return}
+  screenshotCalibrationStage='image';screenshotImagePoints=[];screenshotMapPoints=[];screenshotCalibrationZoom=null;
+  const img=$('routeScreenshotPreview');img.style.cursor='crosshair';
+  img.onclick=handleScreenshotImageClick;
+  $('routeTraceStatus').textContent='PASO 1/2: toca en la imagen dos puntos reconocibles, separados y en diagonal: primero uno hacia arriba/izquierda y luego otro hacia abajo/derecha. Por ejemplo, dos cruces de carreteras.';
+  $('mapStatus').textContent='📸 Alineación iniciada. Primero marca los dos puntos en la captura de arriba.';
+  $('routeScreenshotPanel').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function handleScreenshotImageClick(event){
+  if(screenshotCalibrationStage!=='image')return;
+  const img=$('routeScreenshotPreview'),rect=img.getBoundingClientRect();
+  // Convert clicks against the actual image pixels, excluding any letterbox space
+  // created by object-fit:contain on tall/wide screenshots.
+  const scale=Math.min(rect.width/img.naturalWidth,rect.height/img.naturalHeight);
+  const renderedW=img.naturalWidth*scale,renderedH=img.naturalHeight*scale;
+  const left=rect.left+(rect.width-renderedW)/2,top=rect.top+(rect.height-renderedH)/2;
+  const x=Math.max(0,Math.min(1,(event.clientX-left)/renderedW));
+  const y=Math.max(0,Math.min(1,(event.clientY-top)/renderedH));
+  screenshotImagePoints.push({x,y});
+  if(screenshotImagePoints.length===1){
+    $('routeTraceStatus').textContent='Punto 1 guardado. Ahora toca un segundo punto claramente reconocible, situado más abajo y a la derecha que el primero.';
+    return;
+  }
+  const [p1,p2]=screenshotImagePoints;
+  if(p2.x-p1.x<0.03||p2.y-p1.y<0.03){
+    screenshotImagePoints=[];
+    $('routeTraceStatus').textContent='Los puntos deben estar separados y el segundo debe quedar abajo y a la derecha del primero. Vuelve a marcar los dos.';
+    return;
+  }
+  screenshotCalibrationStage='map';screenshotCalibrationZoom=map.getZoom();
+  $('routeScreenshotPanel').classList.add('hidden');
+  $('routeTraceStatus').textContent='PASO 2/2: ahora toca en el mapa real el mismo primer punto (el de arriba/izquierda). Después toca el segundo punto correspondiente.';
+  $('mapStatus').textContent='🗺️ Toca en el mapa la ubicación real que corresponde al primer punto de la captura.';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function handleScreenshotMapClick(latlng){
+  if(!map||screenshotCalibrationStage!=='map')return;
+  if(map.getZoom()!==screenshotCalibrationZoom){
+    screenshotCalibrationZoom=map.getZoom();screenshotMapPoints=[];
+    $('mapStatus').textContent='Has cambiado el zoom. Vuelve a tocar los dos puntos reales con el mismo zoom, empezando por el primero.';
+    $('routeTraceStatus').textContent='Toca en el mapa real el primer punto y después el segundo, sin cambiar el zoom.';
+    return;
+  }
+  screenshotMapPoints.push(latlng);
+  if(screenshotMapPoints.length===1){$('mapStatus').textContent='✅ Primer punto real guardado. Toca ahora la ubicación del segundo punto.';return}
+  const [a,b]=screenshotMapPoints,[p1,p2]=screenshotImagePoints;
+  const z=screenshotCalibrationZoom,pa=map.project(a,z),pb=map.project(b,z);
+  const dx=p2.x-p1.x,dy=p2.y-p1.y;
+  const sx=(pb.x-pa.x)/dx,sy=(pb.y-pa.y)/dy;
+  if(!Number.isFinite(sx)||!Number.isFinite(sy)||sx<=0||sy<=0||Math.abs(sx)<1||Math.abs(sy)<1){
+    screenshotCalibrationStage='image';screenshotImagePoints=[];screenshotMapPoints=[];
+    $('routeScreenshotPanel').classList.remove('hidden');
+    $('routeTraceStatus').textContent='No he podido alinear esos puntos. Pulsa «Alinear captura con mapa» y elige referencias más separadas.';
+    $('mapStatus').textContent='⚠️ Los puntos no forman una alineación válida. Inténtalo con dos cruces bien separados.';
+    return;
+  }
+  const x0=pa.x-sx*p1.x,y0=pa.y-sy*p1.y,x1=x0+sx,y1=y0+sy;
+  const nw=map.unproject([x0,y0],z),se=map.unproject([x1,y1],z);
+  const bounds=L.latLngBounds(nw,se);
+  if(screenshotOverlay)map.removeLayer(screenshotOverlay);
+  screenshotOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{opacity:Number($('screenshotOpacity').value||65)/100,interactive:true}).addTo(map);
+  enableScreenshotOverlayDragging();
+  screenshotMoveMode=false;
+  if($('moveScreenshotButton'))$('moveScreenshotButton').textContent='↔️ Mover captura para encajarla';
+  screenshotCalibrationStage=null;
+  $('routeScreenshotPreview').style.cursor='';$('routeScreenshotPreview').onclick=null;
+  $('routeScreenshotPanel').classList.remove('hidden');
+  map.fitBounds(bounds,{padding:[20,20]});
+  $('routeTraceStatus').textContent='✅ Captura colocada sobre el mapa. Ajusta la transparencia para ver las carreteras y después pulsa «Trazar ruta sobre el mapa». La alineación depende de los dos puntos elegidos.';
+  $('mapStatus').textContent='✅ Captura alineada. Ahora puedes marcar los puntos siguiendo la línea de la ruta.';
+}
 function closeRouteScreenshot(){
+  screenshotCalibrationStage=null;screenshotImagePoints=[];screenshotMapPoints=[];
+  if(screenshotOverlay&&map){map.removeLayer(screenshotOverlay);screenshotOverlay=null}
+  $('routeScreenshotPreview').style.cursor='';$('routeScreenshotPreview').onclick=null;
   screenshotReferenceActive=false;
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
-  if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
+  if(screenshotObjectUrl&&screenshotObjectUrl.startsWith('blob:'))URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null;
 }
 async function loadGoogleMapsLink(){
   const raw=$('googleMapsLink').value.trim();
@@ -1051,7 +1280,21 @@ async function importRouteFile(file){
     map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
     const km=Math.round(shape.reduce((sum,p,i)=>i?sum+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:p[0],lon:p[1]}):sum,0));
     const routeName=file.name.replace(/\.(gpx|kml|geojson|json)$/i,'').replace(/[_-]+/g,' ').trim()||'Ruta importada';
-    current={id:Date.now(),name:routeName,km:km+' km',duration:'',curves:3,stop:'none',realStop:null,realStops:[],poiError:null,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Importada',type:'Mixta',shape,routePoints:[],region:$('region').value,start:'Ruta importada',requestedKm:km,requestedDuration:0,requestedNote:'Importada desde '+file.name};
+    const selectedStop=$('stop').value;
+    let realStops=[],poiError=null;
+    if(selectedStop!=='none'){
+      $('mapStatus').textContent='📍 Ruta importada. Buscando establecimientos cercanos…';
+      const poiResult=await findRealStops(shape,selectedStop);
+      realStops=poiResult.places;poiError=poiResult.error;
+      realStops.forEach(place=>{
+        const cat=place.category;
+        const popup='<b>'+escapeHtml(place.name)+'</b><br>'+cat.emoji+' '+cat.name+'<br>A '+place.distanceKm.toFixed(1)+' km de la ruta';
+        const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
+        marker.bindTooltip(cat.emoji+' '+escapeHtml(place.name),{sticky:true,direction:'top',opacity:0.96});
+        routeMarkers.push(marker);
+      });
+    }
+    current={id:Date.now(),name:routeName,km:km+' km',duration:'',curves:3,stop:selectedStop,realStop:realStops[0]||null,realStops,poiError,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Importada',type:'Mixta',shape,routePoints:[],region:$('region').value,start:'Ruta importada',requestedKm:km,requestedDuration:0,requestedNote:'Importada desde '+file.name};
     render(current);
     $('mapStatus').textContent='✅ Ruta importada: '+shape.length+' puntos · '+km+' km. Puedes guardarla, compartirla o abrirla en Google Maps.';
     $('result').scrollIntoView({behavior:'smooth'});
