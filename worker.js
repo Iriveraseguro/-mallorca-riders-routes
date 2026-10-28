@@ -58,12 +58,12 @@ export default {
       if (request.method !== "POST") return Response.json({error:"Método no permitido."},{status:405,headers});
       const query = await request.text();
       if (!query || query.length > 30000 || !/^\s*\[out:json\]/i.test(query) || !/\bout\s+center\s+tags\s*;/i.test(query)) return Response.json({error:"Consulta de mapa no válida."},{status:400,headers});
-      let lastError = "Los servicios de OpenStreetMap no responden.";
-      for (const endpoint of OVERPASS_ENDPOINTS) {
-        const startedAt = Date.now();
+      // Consultar los servicios en paralelo evita consumir casi todo el
+      // tiempo de ejecución esperando a que cada proveedor falle por turno.
+      const startedAt = Date.now();
+      const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
         const controller = new AbortController();
-        // Four short attempts keep the request below Cloudflare's wall-time limit.
-        const timer = setTimeout(() => controller.abort(), 5500);
+        const timer = setTimeout(() => controller.abort(), 6000);
         try {
           console.info("[overpass] intentando", endpoint);
           const response = await fetch(endpoint, {
@@ -74,36 +74,32 @@ export default {
           });
           const body = await response.text();
           console.info("[overpass] respuesta", endpoint, "status", response.status, "ms", Date.now()-startedAt, "bytes", body.length);
-          if (!response.ok) {
-            lastError = "OpenStreetMap respondió HTTP " + response.status + ".";
-            console.warn("[overpass] endpoint rechazado", endpoint, response.status);
-            continue;
-          }
+          if (!response.ok) throw new Error("OpenStreetMap respondió HTTP " + response.status + ".");
           let payload;
           try { payload = JSON.parse(body); }
-          catch {
-            lastError = "Respuesta no válida de OpenStreetMap.";
-            console.warn("[overpass] JSON inválido", endpoint);
-            continue;
-          }
-          if (!Array.isArray(payload.elements)) {
-            lastError = "La respuesta de OpenStreetMap no contiene establecimientos.";
-            console.warn("[overpass] falta elements", endpoint);
-            continue;
-          }
+          catch { throw new Error("Respuesta no válida de OpenStreetMap."); }
+          if (!Array.isArray(payload.elements)) throw new Error("La respuesta de OpenStreetMap no contiene establecimientos.");
           console.info("[overpass] éxito", endpoint, "establecimientos", payload.elements.length);
-          return Response.json(payload,{headers});
+          return payload;
         } catch (error) {
-          lastError = error?.name === "AbortError"
-            ? "La búsqueda de OpenStreetMap ha tardado demasiado."
-            : "No se pudo conectar con OpenStreetMap.";
           console.warn("[overpass] fallo", endpoint, "ms", Date.now()-startedAt, "tipo", error?.name, "detalle", String(error?.message||error));
+          throw error;
         } finally {
           clearTimeout(timer);
         }
+      });
+      try {
+        const payload = await Promise.any(attempts);
+        return Response.json(payload,{headers});
+      } catch (error) {
+        const reasons = error?.errors || [];
+        const lastError = reasons.find(e => e?.message)?.message ||
+          (reasons.some(e => e?.name === "AbortError")
+            ? "La búsqueda de OpenStreetMap ha tardado demasiado."
+            : "Los servicios de OpenStreetMap no responden.");
+        console.error("[overpass] fallaron todos los endpoints", lastError);
+        return Response.json({error:lastError},{status:502,headers});
       }
-      console.error("[overpass] fallaron todos los endpoints", lastError);
-      return Response.json({error:lastError},{status:502,headers});
     }
     if (url.pathname === "/api/resolve-google") {
       const headers = {"Access-Control-Allow-Origin":url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
