@@ -714,11 +714,11 @@ async function generateRoute(){
     if(!plan.manual){
       chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
     }
-    let realStop=null,realStops=[],poiError=null;
+    let realStop=null,realStops=[],poiError=null,poiDiagnostics=null;
     if($('stop').value!=='none'){
       $('mapStatus').textContent='📍 Buscando establecimientos reales cerca de la ruta…';
       const poiResult=await findRealStops(result.coords,$('stop').value);
-      realStops=poiResult.places;poiError=poiResult.error;
+      realStops=poiResult.places;poiError=poiResult.error;poiDiagnostics=poiResult;
       const icon=stopIcon($('stop').value);
       realStops.forEach(place=>{
         const cat=place.category;
@@ -737,7 +737,7 @@ async function generateRoute(){
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
     render(current);
-    const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
+    const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos. Diagnóstico OSM: '+(poiDiagnostics?.rawCount??'?')+' recibidos, '+(poiDiagnostics?.candidateCount??'?')+' con coordenadas, '+(poiDiagnostics?.nearCount??'?')+' cerca de la ruta.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
   }catch(e){
     console.error('Error al generar ruta:',e);
