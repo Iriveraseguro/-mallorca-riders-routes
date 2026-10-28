@@ -87,7 +87,7 @@ export default {
         // públicos que ya están limitando peticiones con HTTP 429.
         for (const endpoint of OVERPASS_ENDPOINTS) {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 4500);
+          const timer = setTimeout(() => controller.abort(), 15000);
           try {
             console.info("[overpass] intentando", endpoint);
             const response = await fetch(endpoint, {
