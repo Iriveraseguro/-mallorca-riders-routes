@@ -577,9 +577,13 @@ function routeShapeIsInRegion(coords,region,geometry){
   return false;
 }
 function poiQueryForStop(stop){
+  // El filtro espacial se inserta ANTES de las etiquetas al construir la consulta
+  // Overpass QL: node(around:...)[amenity=...]; es la forma más compatible.
   if(stop==='all')return [
     'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
   ];
   if(stop.includes('Restaurante'))return [
     'node["amenity"~"^(restaurant|fast_food)$"]',
@@ -593,17 +597,13 @@ function poiQueryForStop(stop){
     'node["amenity"="fuel"]',
     'way["amenity"="fuel"]'
   ];
+  if(stop.includes('Mirador'))return [
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
+  ];
   return [];
 }
 
-function placeCategory(tags){
-  if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
-  if(tags.amenity==='fuel')return {name:'Gasolinera',emoji:'⛽',color:'#f97316'};
-  if(tags.amenity==='cafe')return {name:'Cafetería',emoji:'☕',color:'#f59e0b'};
-  if(tags.amenity==='bar'||tags.amenity==='pub')return {name:'Bar',emoji:'🍺',color:'#3b82f6'};
-  if(tags.amenity==='restaurant'||tags.amenity==='fast_food')return {name:'Restaurante',emoji:'🍽️',color:'#ef4444'};
-  return {name:'Establecimiento',emoji:'📍',color:'#64748b'};
-}
 function placeCategory(tags){
   if(tags.tourism==='viewpoint')return {name:'Mirador',emoji:'📸',color:'#a855f7'};
   if(tags.amenity==='fuel')return {name:'Gasolinera',emoji:'⛽',color:'#f97316'};
@@ -657,8 +657,13 @@ async function findRealStops(coords,stop){
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1800,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:20];('+clauses+');out center tags;';
+    // Consulta cada muestra usando la sintaxis Overpass QL más compatible:
+    // el filtro around va antes de los filtros por etiquetas.
+    const clauses=samples.flatMap(p=>selector.map(q=>{
+      const match=q.match(/^(node|way)(.*)$/);
+      return match?match[1]+'(around:1800,'+p.lat+','+p.lon+')'+match[2]+';':'';
+    })).join('');
+    const query='[out:json][timeout:25];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='/overpass';
     let data=null;
