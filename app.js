@@ -639,16 +639,25 @@ function stopIcon(stop){
 async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
-    // un rectángulo enorme que incluye mucha zona ajena a la ruta.
-   const sampleCount=2;
+    // Muestreamos a lo largo de TODA la ruta según distancia real, no solo
+    // en el inicio y el final. Así no se pierden pueblos y establecimientos intermedios.
+    let routeKm=0;
+    const cumulative=[0];
+    for(let i=1;i<coords.length;i++){
+      routeKm+=distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
+      cumulative.push(routeKm);
+    }
+    const sampleCount=Math.max(4,Math.min(18,Math.ceil(routeKm/6)+1));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
-      const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
+      const target=routeKm*i/(sampleCount-1);
+      let index=0;
+      while(index<cumulative.length-1&&cumulative[index]<target)index++;
+      const p=coords[index];
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1500,'+p.lat+','+p.lon+');')).join('');
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1800,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:20];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='/overpass';
