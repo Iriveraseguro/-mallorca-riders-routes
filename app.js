@@ -610,7 +610,7 @@ async function findRealStops(coords,stop){
     })).join('');
     const query='[out:json][timeout:25];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
+    const endpoint='/overpass';
     let data=null;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
     try{
