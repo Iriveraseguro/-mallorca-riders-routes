@@ -648,11 +648,11 @@ async function findRealStops(coords,stop){
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:900,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:12];('+clauses+');out center tags;';
+    const query='[out:json][timeout:25];('+clauses+');out center tags;';
     let data=null,lastError='Los servicios de OpenStreetMap no responden.';
     // Todas las consultas pasan por el Worker propio: evita duplicar peticiones
     // directas a los mismos servicios cuando el proxy ya está ocupado.
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),23500);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),70000);
     try{
       const res=await fetch('/overpass',{
         method:'POST',
