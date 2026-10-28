@@ -84,6 +84,7 @@ export default {
 
       const work = (async () => {
         const errors = [];
+        let emptyPayload = null;
         // Probar en serie: evita lanzar cuatro consultas simultáneas a servicios
         // públicos que ya están limitando peticiones con HTTP 429.
         for (const endpoint of OVERPASS_ENDPOINTS) {
@@ -103,6 +104,12 @@ export default {
             try { payload = JSON.parse(body); }
             catch { throw new Error("Respuesta no válida de OpenStreetMap."); }
             if (!Array.isArray(payload.elements)) throw new Error("La respuesta no contiene establecimientos.");
+            if (payload.elements.length === 0) {
+              emptyPayload = payload;
+              errors.push(endpoint + ": respuesta válida sin resultados; probando otro servidor");
+              console.warn("[overpass] respuesta vacía; se probará otro servidor", endpoint);
+              continue;
+            }
             console.info("[overpass] éxito", endpoint, "establecimientos", payload.elements.length);
             overpassCache.set(query,{payload,expiresAt:Date.now()+15*60*1000});
             while (overpassCache.size > 60) overpassCache.delete(overpassCache.keys().next().value);
@@ -115,6 +122,7 @@ export default {
             clearTimeout(timer);
           }
         }
+        if (emptyPayload) return emptyPayload;
         throw new Error(errors.join(" | ") || "Los servicios de OpenStreetMap no responden.");
       })();
 
