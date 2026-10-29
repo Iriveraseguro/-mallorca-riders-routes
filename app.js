@@ -591,15 +591,14 @@ function stopIcon(stop){
 async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
   try{
-    // Muestreamos a lo largo de TODA la ruta según distancia real, no solo
-    // en el inicio y el final. Así no se pierden pueblos y establecimientos intermedios.
     let routeKm=0;
     const cumulative=[0];
     for(let i=1;i<coords.length;i++){
       routeKm+=distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
       cumulative.push(routeKm);
     }
-    const sampleCount=Math.max(6,Math.min(36,Math.ceil(routeKm/4)+1));
+    // Menos muestras y radios más pequeños reducen mucho el coste de Overpass.
+    const sampleCount=Math.max(6,Math.min(16,Math.ceil(routeKm/10)+1));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
       const target=routeKm*i/(sampleCount-1);
@@ -609,37 +608,34 @@ async function findRealStops(coords,stop){
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    // Consulta cada muestra usando la sintaxis Overpass QL más compatible:
-    // el filtro around va antes de los filtros por etiquetas.
-    const clauses=samples.flatMap(p=>selector.map(q=>{
-      const match=q.match(/^(node|way)(.*)$/);
-      return match?match[1]+'(around:4000,'+p.lat+','+p.lon+')'+match[2]+';':'';
-    })).join('');
-    const query='[out:json][timeout:25];('+clauses+');out center tags;';
-    // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='/overpass';
-    let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
-    try{
-      const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
-      if(!res.ok){
-        let detail='';
-        try{
-          const errData=await res.json();
-          detail=errData.detail||errData.error||'';
-        }catch(_){}
-        throw new Error('HTTP '+res.status+(detail?' — '+detail:''));
-      }
-      const json=await res.json();
-      if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
-      data=json;
-    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha agotado el tiempo de espera');throw error}finally{clearTimeout(timer)}
-    if(!data)throw new Error('sin respuesta del servidor');
-    const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
+    // Consultas pequeñas por tramos: un error no descarta lo obtenido en los demás.
+    const batches=[];
+    for(let i=0;i<samples.length;i+=4)batches.push(samples.slice(i,i+4));
+    const allElements=new Map(),errors=[];
+    for(const batch of batches){
+      const clauses=batch.flatMap(p=>selector.map(q=>{
+        const match=q.match(/^(node|way)(.*)$/);
+        return match?match[1]+'(around:3000,'+p.lat+','+p.lon+')'+match[2]+';':'';
+      })).join('');
+      const query='[out:json][timeout:15];('+clauses+');out center tags;';
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+      try{
+        const res=await fetch('/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+        const json=await res.json().catch(()=>null);
+        if(!res.ok)throw new Error('HTTP '+res.status+(json?.detail||json?.error?' — '+(json.detail||json.error):''));
+        if(!Array.isArray(json?.elements))throw new Error('respuesta no válida del servidor');
+        for(const el of json.elements)allElements.set(el.type+'/'+el.id,el);
+      }catch(error){
+        errors.push(String(error?.name==='AbortError'?'tiempo de espera agotado':error?.message||error));
+      }finally{clearTimeout(timer)}
+    }
+    const elements=[...allElements.values()];
+    const candidates=elements.map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
     const stride=Math.max(1,Math.floor(coords.length/140));
     const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=3).sort((a,b)=>a.distanceKm-b.distanceKm);
     const unique=[];for(const p of places){if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;unique.push(p);if(unique.length>=80)break}
-    return {places:unique,error:null,rawCount:(data.elements||[]).length,candidateCount:candidates.length,nearCount:places.length};
+    const error=unique.length?null:(errors.length?([...new Set(errors)].join(' | ')) : null);
+    return {places:unique,error,rawCount:elements.length,candidateCount:candidates.length,nearCount:places.length,partialErrors:errors};
   }catch(e){console.warn('No se pudieron consultar establecimientos de OpenStreetMap',e);return {places:[],error:String(e?.message||e||'error de consulta'),rawCount:0,candidateCount:0,nearCount:0}}
 }
 async function requestRoute(locations,plan){
