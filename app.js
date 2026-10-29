@@ -522,9 +522,12 @@ function routeShapeIsInRegion(coords,region,geometry){
   return false;
 }
 function poiQueryForStop(stop){
+  // Incluimos miradores en "todos" y también cuando se eligen por separado.
   if(stop==='all')return [
     'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
   ];
   if(stop.includes('Restaurante'))return [
     'node["amenity"~"^(restaurant|fast_food)$"]',
@@ -537,6 +540,10 @@ function poiQueryForStop(stop){
   if(stop.includes('Gasolinera'))return [
     'node["amenity"="fuel"]',
     'way["amenity"="fuel"]'
+  ];
+  if(stop.includes('Mirador'))return [
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
   ];
   return [];
 }
