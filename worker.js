@@ -122,7 +122,7 @@ export default {
             clearTimeout(timer);
           }
         }
-        if (emptyPayload) return emptyPayload;
+        if (emptyPayload && errors.length === OVERPASS_ENDPOINTS.length && errors.every(e => e.includes('respuesta válida sin resultados'))) return emptyPayload;
         throw new Error(errors.join(" | ") || "Los servicios de OpenStreetMap no responden.");
       })();
 
