@@ -599,7 +599,7 @@ async function findRealStops(coords,stop){
       routeKm+=distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
       cumulative.push(routeKm);
     }
-    const sampleCount=Math.max(4,Math.min(18,Math.ceil(routeKm/6)+1));
+    const sampleCount=Math.max(6,Math.min(36,Math.ceil(routeKm/4)+1));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
       const target=routeKm*i/(sampleCount-1);
@@ -613,7 +613,7 @@ async function findRealStops(coords,stop){
     // el filtro around va antes de los filtros por etiquetas.
     const clauses=samples.flatMap(p=>selector.map(q=>{
       const match=q.match(/^(node|way)(.*)$/);
-      return match?match[1]+'(around:1800,'+p.lat+','+p.lon+')'+match[2]+';':'';
+      return match?match[1]+'(around:4000,'+p.lat+','+p.lon+')'+match[2]+';':'';
     })).join('');
     const query='[out:json][timeout:25];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
