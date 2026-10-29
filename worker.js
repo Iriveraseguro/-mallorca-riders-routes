@@ -1,10 +1,8 @@
 const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","google.com","maps.google.com"]);
 const OVERPASS_ENDPOINTS = [
-  "https://overpass.osm.ch/api/interpreter",
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass.nchc.org.tw/api/interpreter"
+  "https://overpass.osm.ch/api/interpreter"
 ];
 
 // Caché temporal por consulta y deduplicación de peticiones idénticas en el Worker.
@@ -89,7 +87,7 @@ export default {
         // públicos que ya están limitando peticiones con HTTP 429.
         for (const endpoint of OVERPASS_ENDPOINTS) {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 10000);
+          const timer = setTimeout(() => controller.abort(), 7000);
           try {
             console.info("[overpass] intentando", endpoint);
             const response = await fetch(endpoint, {
