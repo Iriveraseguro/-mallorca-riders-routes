@@ -587,7 +587,7 @@ async function findRealStops(coords,stop){
       cumulative.push(routeKm);
     }
     // Una única consulta agrupada evita que varias peticiones consecutivas agoten el tiempo.
-    const sampleCount=Math.max(5,Math.min(12,Math.ceil(routeKm/12)+1));
+    const sampleCount=Math.max(5,Math.min(36,Math.ceil(routeKm/7)+1));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
       const target=routeKm*i/(sampleCount-1);
@@ -599,7 +599,7 @@ async function findRealStops(coords,stop){
     }
     const clauses=samples.flatMap(p=>selector.map(q=>{
       const match=q.match(/^(node|way|relation)(.*)$/);
-      return match?match[1]+'(around:2500,'+p.lat+','+p.lon+')'+match[2]+';':'';
+      return match?match[1]+'(around:3500,'+p.lat+','+p.lon+')'+match[2]+';':'';
     })).join('');
     const query='[out:json][timeout:20];('+clauses+');out center tags;';
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),28000);
@@ -623,7 +623,7 @@ async function findRealStops(coords,stop){
       let nearest=Infinity;
       for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));
       return {...c,distanceKm:nearest};
-    }).filter(c=>c.distanceKm<=3).sort((a,b)=>a.distanceKm-b.distanceKm);
+    }).filter(c=>c.distanceKm<=3.5).sort((a,b)=>a.distanceKm-b.distanceKm);
     const unique=[];
     for(const p of places){
       if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;
