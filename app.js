@@ -96,33 +96,34 @@ function clearRoute(){if(!map) return; if(routeLine){map.removeLayer(routeLine);
 // de la geometría, por lo que funcionan igual en rutas generadas, importadas y compartidas.
 function addDirectionalArrows(coords){
   if(!map||!Array.isArray(coords)||coords.length<3)return;
-  let total=0,segments=[];
+  const segments=[];let total=0;
   for(let i=1;i<coords.length;i++){
     const a=coords[i-1],b=coords[i];
     const length=distanceKm({lat:a[0],lon:a[1]},{lat:b[0],lon:b[1]});
-    if(!Number.isFinite(length)||length<=0)continue;
-    segments.push({a,b,length,start:total,end:total+length});
-    total+=length;
+    if(!Number.isFinite(length)||length<0.003)continue;
+    segments.push({a,b,start:total,end:total+length,length});total+=length;
   }
   if(!segments.length||total<1)return;
-  const spacing=total<18?Math.max(5,total/3):Math.max(7,Math.min(14,total/8));
-  for(let target=spacing/2;target<total-spacing/4;target+=spacing){
-    const seg=segments.find(s=>target>=s.start&&target<=s.end);
-    if(!seg)continue;
-    const fraction=(target-seg.start)/seg.length;
-    const lat=seg.a[0]+(seg.b[0]-seg.a[0])*fraction;
-    const lon=seg.a[1]+(seg.b[1]-seg.a[1])*fraction;
-    const pa=map.latLngToLayerPoint([seg.a[0],seg.a[1]]);
-    const pb=map.latLngToLayerPoint([seg.b[0],seg.b[1]]);
-    const angle=Math.atan2(pb.y-pa.y,pb.x-pa.x)*180/Math.PI;
+  const pointAt=distance=>{
+    const d=Math.max(0,Math.min(total,distance));
+    const s=segments.find(x=>d>=x.start&&d<=x.end)||segments[segments.length-1];
+    const f=s.length?(d-s.start)/s.length:0;
+    return [s.a[0]+(s.b[0]-s.a[0])*f,s.a[1]+(s.b[1]-s.a[1])*f];
+  };
+  const spacing=Math.max(8,Math.min(14,total/Math.max(2,Math.floor(total/10))));
+  for(let target=spacing/2;target<total-spacing/3;target+=spacing){
+    const position=pointAt(target);
+    // La orientación se calcula con una tangente suavizada de unos 160 m,
+    // no con un segmento diminuto que pueda hacer zigzaguear las flechas.
+    const before=map.latLngToLayerPoint(pointAt(Math.max(0,target-0.08)));
+    const after=map.latLngToLayerPoint(pointAt(Math.min(total,target+0.08)));
+    const angle=Math.atan2(after.y-before.y,after.x-before.x)*180/Math.PI;
     const icon=L.divIcon({
       className:'route-direction-icon',
       html:'<span class="route-direction-arrow" style="transform:rotate('+angle.toFixed(1)+'deg)">➤</span>',
-      iconSize:[24,24],
-      iconAnchor:[12,12]
+      iconSize:[24,24],iconAnchor:[12,12]
     });
-    const marker=L.marker([lat,lon],{icon,interactive:false,keyboard:false,zIndexOffset:500}).addTo(map);
-    routeMarkers.push(marker);
+    routeMarkers.push(L.marker(position,{icon,interactive:false,keyboard:false,zIndexOffset:500}).addTo(map));
   }
 }
 function refreshManualPointLabels(){
@@ -538,6 +539,10 @@ function poiQueryForStop(stop){
     'node["amenity"="fuel"]',
     'way["amenity"="fuel"]'
   ];
+  if(stop.includes('Mirador'))return [
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
+  ];
   return [];
 }
 
@@ -596,7 +601,7 @@ async function findRealStops(coords,stop){
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
     const query='[out:json][timeout:8];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
+    const endpoint='/api/overpass';
     let data=null;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
     try{
