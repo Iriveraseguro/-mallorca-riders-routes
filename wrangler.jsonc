@@ -1,12 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mallorca-riders-routes",
+  "name": "mallorca-riders-routes-preview-20261030",
   "main": "worker.js",
   "compatibility_date": "2026-10-23",
+  "workers_dev": true,
   "assets": {
     "directory": ".",
     "binding": "ASSETS",
     "run_worker_first": ["/api/*"]
-  },
-  "previews": {}
+  }
 }
