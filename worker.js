@@ -55,6 +55,45 @@ export default {
         clearTimeout(timer);
       }
     }
+    if (url.pathname === "/api/overpass-diagnostic") {
+      if (request.method !== "GET") return Response.json({error:"Usa GET."},{status:405});
+      const locations = [
+        {name:"Palma",lat:39.5696,lon:2.6502},
+        {name:"Inca",lat:39.7211,lon:2.9109}
+      ];
+      const checks = [];
+      for (const endpoint of OVERPASS_ENDPOINTS) {
+        const started = Date.now();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 9000);
+        try {
+          const loc = locations[0];
+          const query = '[out:json][timeout:8];(node(around:1200,'+loc.lat+','+loc.lon+')["amenity"~"^(restaurant|cafe|fuel|bar|pub)$"];way(around:1200,'+loc.lat+','+loc.lon+')["amenity"~"^(restaurant|cafe|fuel|bar|pub)$"];node(around:1200,'+loc.lat+','+loc.lon+')["tourism"="viewpoint"];way(around:1200,'+loc.lat+','+loc.lon+')["tourism"="viewpoint"];);out center tags;';
+          const response = await fetch(endpoint,{
+            method:"POST",
+            headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersDiagnostic/1.0"},
+            body:new URLSearchParams({data:query}).toString(),
+            signal:controller.signal
+          });
+          const raw = await response.text();
+          let payload = null;
+          try { payload = JSON.parse(raw); } catch {}
+          checks.push({
+            endpoint,
+            status:response.status,
+            ms:Date.now()-started,
+            count:Array.isArray(payload?.elements)?payload.elements.length:null,
+            examples:Array.isArray(payload?.elements)?payload.elements.slice(0,8).map(x=>x.tags?.name||x.tags?.amenity||x.tags?.tourism||"sin nombre"):[],
+            error:response.ok?(payload?"": "respuesta JSON no válida"):"HTTP "+response.status+" "+raw.slice(0,180)
+          });
+        } catch (error) {
+          checks.push({endpoint,ms:Date.now()-started,error:error?.name==="AbortError"?"tiempo de espera agotado":String(error?.message||error)});
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      return Response.json({diagnostic:"Mallorca Riders Overpass",location:"Palma, radio 1,2 km",tested_at:new Date().toISOString(),checks},{headers:{"Cache-Control":"no-store","Access-Control-Allow-Origin":"*"}});
+    }
     if (url.pathname === "/overpass") {
       const headers = {"Access-Control-Allow-Origin":url.origin,"Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type, Accept","Vary":"Origin","Cache-Control":"no-store"};
       if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
