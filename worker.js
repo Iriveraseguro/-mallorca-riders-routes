@@ -2,6 +2,39 @@ const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","googl
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/route") {
+      const headers = {
+        "Access-Control-Allow-Origin": url.origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Accept",
+        "Cache-Control": "no-store",
+        "Vary": "Origin"
+      };
+      const origin = request.headers.get("Origin");
+      if (origin && origin !== url.origin) return Response.json({error:"Origen no permitido."},{status:403,headers});
+      if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
+      if (request.method !== "POST") return Response.json({error:"Método no permitido."},{status:405,headers});
+      try {
+        const body = await request.text();
+        if (!body || body.length > 100000) return Response.json({error:"Solicitud de ruta no válida."},{status:400,headers});
+        const upstream = await fetch("https://valhalla1.openstreetmap.de/route", {
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json",
+            "Accept":"application/json",
+            "X-Client-Id":"mallorca-riders-routes"
+          },
+          body,
+          signal:AbortSignal.timeout(22000)
+        });
+        return new Response(upstream.body, {
+          status:upstream.status,
+          headers:{...headers,"Content-Type":upstream.headers.get("Content-Type")||"application/json"}
+        });
+      } catch (error) {
+        return Response.json({error:"No se pudo conectar con el motor de rutas.",detail:String(error?.message||error).slice(0,250)},{status:502,headers});
+      }
+    }
     if (url.pathname === "/api/overpass") {
       const headers = {"Cache-Control":"no-store"};
       if (request.method !== "POST") return Response.json({error:"Método no permitido."},{status:405,headers});
