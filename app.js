@@ -525,7 +525,9 @@ function routeShapeIsInRegion(coords,region,geometry){
 function poiQueryForStop(stop){
   if(stop==='all')return [
     'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'node["tourism"="viewpoint"]',
+    'way["tourism"="viewpoint"]'
   ];
   if(stop.includes('Restaurante'))return [
     'node["amenity"~"^(restaurant|fast_food)$"]',
