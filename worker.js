@@ -49,41 +49,35 @@ export default {
       if (!query || query.length > 12000 || clauses.length < 1 || clauses.length > 20 || clauses.some(clause => !allowedClause.test(clause))) {
         return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
-      // Fail over between independent public Overpass instances. The primary
-      // endpoint can reject Cloudflare-origin connections (521) or be overloaded.
+      // Use independent global and Europe-wide mirrors concurrently: public
+      // Overpass instances can return 504/521 under load. The first valid
+      // response wins, avoiding a long serial wait on a failed mirror.
       const endpoints = [
         "https://overpass.private.coffee/api/interpreter",
+        "https://ovp.dresel.systems/api/interpreter",
         "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
       ];
-      let lastFailure = "";
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(endpoint, {
-            method:"POST",
-            headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},
-            body:"data="+encodeURIComponent(query),
-            signal:AbortSignal.timeout(9500)
-          });
-          const body = await response.text();
-          if (!response.ok) {
-            lastFailure = endpoint+" respondió HTTP "+response.status+": "+body.slice(0,180);
-            continue;
-          }
-          let parsed;
-          try { parsed=JSON.parse(body); } catch {
-            lastFailure = endpoint+" devolvió una respuesta no válida.";
-            continue;
-          }
-          if (!Array.isArray(parsed.elements)) {
-            lastFailure = endpoint+" no devolvió una lista de resultados.";
-            continue;
-          }
-          return Response.json(parsed,{headers});
-        } catch (error) {
-          lastFailure = endpoint+": "+String(error?.message||error).slice(0,180);
-        }
+      const attempts = endpoints.map(async endpoint => {
+        const response = await fetch(endpoint, {
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
+          body:"data="+encodeURIComponent(query),
+          signal:AbortSignal.timeout(12500)
+        });
+        const body = await response.text();
+        if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,140));
+        let parsed;
+        try { parsed=JSON.parse(body); } catch { throw new Error(endpoint+" devolvió una respuesta no válida."); }
+        if (!Array.isArray(parsed.elements)) throw new Error(endpoint+" no devolvió una lista de resultados.");
+        return parsed;
+      });
+      try {
+        const parsed = await Promise.any(attempts);
+        return Response.json(parsed,{headers});
+      } catch (error) {
+        const failures = (error?.errors||[]).map(e=>String(e?.message||e)).join(" | ");
+        return Response.json({error:"No se pudo consultar ningún servidor de establecimientos.",detail:failures.slice(0,500)},{status:502,headers});
       }
-      return Response.json({error:"No se pudo consultar ningún servidor de establecimientos.",detail:lastFailure.slice(0,500)},{status:502,headers});
     }
     if (url.pathname === "/api/resolve-google") {
       const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
