@@ -605,7 +605,7 @@ async function findRealStops(coords,stop){
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='/api/overpass';
     let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),23000);
     try{
       const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
