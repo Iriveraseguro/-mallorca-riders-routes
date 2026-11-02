@@ -49,24 +49,41 @@ export default {
       if (!query || query.length > 12000 || clauses.length < 1 || clauses.length > 20 || clauses.some(clause => !allowedClause.test(clause))) {
         return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
-      try {
-        const response = await fetch("https://overpass-api.de/api/interpreter", {
-          method:"POST",
-          headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},
-          body:"data="+encodeURIComponent(query),
-          signal:AbortSignal.timeout(14000)
-        });
-        const body = await response.text();
-        if (!response.ok) {
-          return Response.json({error:"El servicio de mapas respondió HTTP "+response.status,detail:body.slice(0,500)}, {status:response.status===429?429:502,headers});
+      // Fail over between independent public Overpass instances. The primary
+      // endpoint can reject Cloudflare-origin connections (521) or be overloaded.
+      const endpoints = [
+        "https://overpass.private.coffee/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+      ];
+      let lastFailure = "";
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method:"POST",
+            headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"},
+            body:"data="+encodeURIComponent(query),
+            signal:AbortSignal.timeout(9500)
+          });
+          const body = await response.text();
+          if (!response.ok) {
+            lastFailure = endpoint+" respondió HTTP "+response.status+": "+body.slice(0,180);
+            continue;
+          }
+          let parsed;
+          try { parsed=JSON.parse(body); } catch {
+            lastFailure = endpoint+" devolvió una respuesta no válida.";
+            continue;
+          }
+          if (!Array.isArray(parsed.elements)) {
+            lastFailure = endpoint+" no devolvió una lista de resultados.";
+            continue;
+          }
+          return Response.json(parsed,{headers});
+        } catch (error) {
+          lastFailure = endpoint+": "+String(error?.message||error).slice(0,180);
         }
-        let parsed;
-        try { parsed=JSON.parse(body); } catch { return Response.json({error:"El servicio de mapas devolvió una respuesta no válida."},{status:502,headers}); }
-        if (!Array.isArray(parsed.elements)) return Response.json({error:"La respuesta de mapas no contiene establecimientos."},{status:502,headers});
-        return Response.json(parsed,{headers});
-      } catch (error) {
-        return Response.json({error:"No se pudo conectar con el servicio de mapas.",detail:String(error?.message||error).slice(0,250)},{status:502,headers});
       }
+      return Response.json({error:"No se pudo consultar ningún servidor de establecimientos.",detail:lastFailure.slice(0,500)},{status:502,headers});
     }
     if (url.pathname === "/api/resolve-google") {
       const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
