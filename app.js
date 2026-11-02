@@ -622,9 +622,33 @@ async function findRealStops(coords,stop){
     }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 16 segundos');throw error}finally{clearTimeout(timer)}
     if(!data)throw new Error('sin respuesta del servidor');
     const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
-    const stride=Math.max(1,Math.floor(coords.length/140));
-    const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=3).sort((a,b)=>a.distanceKm-b.distanceKm);
-    const unique=[];for(const p of places){if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;unique.push(p);if(unique.length>=80)break}
+    const stride=Math.max(1,Math.floor(coords.length/500));
+    const cumulative=[0];
+    for(let i=1;i<coords.length;i++) cumulative[i]=cumulative[i-1]+distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
+    const totalLength=cumulative[cumulative.length-1]||1;
+    const places=candidates.map(c=>{
+      let nearest=Infinity,nearestIndex=0;
+      for(let i=0;i<coords.length;i+=stride){
+        const d=distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]});
+        if(d<nearest){nearest=d;nearestIndex=i;}
+      }
+      return {...c,distanceKm:nearest,routeProgress:cumulative[nearestIndex]/totalLength};
+    }).filter(c=>c.distanceKm<=3);
+    // Balance the 80-marker limit across the whole route. Sorting only by
+    // distance previously filled the limit with POIs from one dense area.
+    const sectorCount=10,maxPerSector=8;
+    const sectors=Array.from({length:sectorCount},()=>[]);
+    places.forEach(p=>sectors[Math.min(sectorCount-1,Math.floor(p.routeProgress*sectorCount))].push(p));
+    sectors.forEach(group=>group.sort((a,b)=>a.distanceKm-b.distanceKm));
+    const unique=[];
+    for(const group of sectors){
+      let added=0;
+      for(const p of group){
+        if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;
+        unique.push(p);if(++added>=maxPerSector)break;
+      }
+    }
+    unique.sort((a,b)=>a.routeProgress-b.routeProgress);
     return {places:unique,error:null};
   }catch(e){console.warn('No se pudieron consultar establecimientos de OpenStreetMap',e);return {places:[],error:String(e?.message||e||'error de consulta')}}
 }
