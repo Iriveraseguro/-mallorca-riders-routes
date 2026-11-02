@@ -1,0 +1,23 @@
+name: Deploy Mallorca Riders test worker
+
+on:
+  push:
+    branches:
+      - fix/poi-arrows-overpass-repair-20261030
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy only the test Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: 4887e83dc0665be474369d9c3a64ff69
+          command: deploy --config wrangler.jsonc --name mallorca-riders-proxy-test
