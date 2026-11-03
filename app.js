@@ -159,7 +159,7 @@ function addManualWaypoint(latlng){
   manualMarkers.push(marker);refreshManualPointLabels();marker.openPopup();manualRouteActive=false;
   $('mapStatus').textContent='📍 '+manualWaypoints.length+' punto(s) colocados. Toca un punto para borrarlo individualmente. Añade al menos 2 y pulsa «Terminar puntos».';
 }
-function startManualRoute(){manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
+function startManualRoute(){editingSharedRoute=false;manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
 function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
 function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
 
@@ -752,7 +752,9 @@ async function generateRoute(){
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.slice(1).map((p,i)=>({name:p.name||'Punto '+(i+2),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,sharedRouteId:plan.manual&&current?.sharedRouteId?current.sharedRouteId:null,sharedVersion:plan.manual&&current?.sharedRouteId?sharedRouteVersion:null};
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.slice(1).map((p,i)=>({name:p.name||'Punto '+(i+2),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,sharedRouteId:plan.manual&&editingSharedRoute&&current?.sharedRouteId?current.sharedRouteId:null,sharedVersion:plan.manual&&editingSharedRoute&&current?.sharedRouteId?sharedRouteVersion:null};
+    if(plan.manual){manualRouteActive=false;manualMode=false;$('manualMode').classList.remove('active')}
+    editingSharedRoute=false;
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
@@ -793,6 +795,7 @@ function encodePolyline6(coords){
   return out;
 }
 let pendingSharedRouteId=null,activeSharedRouteId=null,sharedRouteVersion=0,sharedRouteChannel=null;
+let editingSharedRoute=false;
 function routeDistanceKm(value){return Number(String(value||'0').replace(/[^0-9,.]/g,'').replace(',','.'))||0}
 function routeDurationMinutes(value){const t=String(value||'');const h=t.match(/(\\d+)\\s*h/),m=t.match(/(\\d+)\\s*min/);return Number(h?.[1]||0)*60+Number(m?.[1]||0)}
 async function share(){
@@ -901,6 +904,7 @@ async function openSharedRoute(id){
   }
 }
 function editSharedRoute(){
+  editingSharedRoute=true;
   if(!current?.sharedRouteId||!current.shape?.length){alert('Abre primero una ruta compartida.');return}
   $('region').value=current.region||'mallorca';updateRegionUI();
   type=current.type||'Mixta';
