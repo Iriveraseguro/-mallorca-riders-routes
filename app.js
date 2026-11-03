@@ -752,7 +752,7 @@ async function generateRoute(){
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.slice(1).map((p,i)=>({name:p.name||'Punto '+(i+2),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,sharedRouteId:activeSharedRouteId||null,sharedVersion:activeSharedRouteId?sharedRouteVersion:null};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
@@ -772,7 +772,7 @@ async function generateRoute(){
 }
 $('generate').onclick=generateRoute;
 
-function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.')))}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
+function render(r){$('result').classList.remove('hidden');const sharedActions=r.sharedRouteId?'<button class="secondary" onclick="editSharedRoute()">✏️ Proponer cambios</button><button class="secondary" onclick="publishSharedRouteUpdate()">💾 Guardar cambios para todos</button><button class="secondary" onclick="showSharedRouteHistory()">🕘 Versiones anteriores</button>':'';$('result').innerHTML=`<h2>🏍️ ${escapeHtml(r.name)}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${escapeHtml(r.createdBy||'un motero')} · ${r.circular?'ruta circular':'ruta lineal'}${r.sharedRouteId?' · Ruta compartida del club':''}</small><div class="stats"><div class="stat"><b>${escapeHtml(r.km||'')}</b><small>distancia real</small></div><div class="stat"><b>${escapeHtml(r.duration||'')}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(Math.max(1,Math.min(5,Number(r.curves)||3)))}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.')))}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions">${sharedActions}<button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
@@ -792,51 +792,190 @@ function encodePolyline6(coords){
   }
   return out;
 }
+let pendingSharedRouteId=null,activeSharedRouteId=null,sharedRouteVersion=0,sharedRouteChannel=null;
+function routeDistanceKm(value){return Number(String(value||'0').replace(/[^0-9,.]/g,'').replace(',','.'))||0}
+function routeDurationMinutes(value){const t=String(value||'');const h=t.match(/(\\d+)\\s*h/),m=t.match(/(\\d+)\\s*min/);return Number(h?.[1]||0)*60+Number(m?.[1]||0)}
 async function share(){
   if(!current?.shape?.length){alert('Primero genera o abre una ruta.');return}
-  // Compartimos el trazado, los puntos de paso y los establecimientos encontrados.
-  // No se publica la ruta en Supabase ni se exponen otras rutas del usuario.
-  const stops=(Array.isArray(current.realStops)?current.realStops:[]).map(p=>({
-    id:p.id||'',
-    lat:Number(p.lat),
-    lon:Number(p.lon),
-    name:String(p.name||p.category?.name||'Establecimiento'),
-    distanceKm:Number(p.distanceKm||0),
-    tags:p.tags&&typeof p.tags==='object'?p.tags:{},
-    category:p.category&&typeof p.category==='object'?p.category:{name:'Establecimiento',emoji:'📍',color:'#64748b'}
-  })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
-  const routePoints=(Array.isArray(current.routePoints)?current.routePoints:[]).map(p=>({
-    name:String(p.name||'Punto de paso'),lat:Number(p.lat),lon:Number(p.lon)
-  })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
-  const params=new URLSearchParams({
-    route:encodePolyline6(current.shape),
-    name:current.name||'Ruta compartida',
-    km:current.km||'',
-    duration:current.duration||'',
-    curves:String(current.curves||3),
-    type:current.type||type,
-    region:current.region||'mallorca',
-    circular:current.circular?'1':'0',
-    stop:current.stop||'none',
-    stops:JSON.stringify(stops),
-    points:JSON.stringify(routePoints)
-  });
-  const shareUrl=new URL(window.location.href);
-  shareUrl.hash=params.toString();
-  const url=shareUrl.toString();
-  const textMessage=`🏍️ ${current.name||'Ruta compartida'}\n${current.km||''} · ${current.duration||''}\n${stops.length} establecimientos · ${routePoints.length} puntos de paso\nMallorca Riders Routes`;
-  if(navigator.share){
-    try{await navigator.share({title:current.name||'Ruta compartida',text:textMessage,url})}
-    catch(error){if(error?.name!=='AbortError')alert('No se pudo abrir el menú para compartir. Puedes copiar este enlace:\n'+url)}
-  }else if(navigator.clipboard){
-    try{await navigator.clipboard.writeText(textMessage+'\n'+url);alert('Enlace de la ruta completa copiado. Ya puedes enviarlo por WhatsApp.')}
-    catch(_){prompt('Copia este enlace para compartir la ruta completa:',url)}
-  }else{
-    prompt('Copia este enlace para compartir la ruta completa:',url);
+  if(!sbClient||!sbSession){setAuthStatus('Para crear un enlace colaborativo, inicia sesión con tu cuenta de Mallorca Riders.');alert('Inicia sesión para compartir una ruta editable con el club.');return}
+  try{
+    let id=activeSharedRouteId||current.sharedRouteId||null;
+    if(!id){
+      setAuthStatus('Publicando la ruta compartida para el club…');
+      const payload={
+        creator_id:sbSession.user.id,
+        title:String(current.name||'Ruta compartida').slice(0,80),
+        region:current.region||'mallorca',
+        route_type:current.type||'Mixta',
+        distance_km:routeDistanceKm(current.km),
+        duration_minutes:routeDurationMinutes(current.duration),
+        route_geojson:current,
+        stops:Array.isArray(current.realStops)?current.realStops:[],
+        notes:String(current.requestedNote||'').slice(0,500),
+        is_published:true
+      };
+      const {data,error}=await sbClient.from('shared_routes').insert(payload).select('id,version').single();
+      if(error)throw error;
+      id=data.id;sharedRouteVersion=Number(data.version)||1;activeSharedRouteId=id;current.sharedRouteId=id;current.sharedVersion=sharedRouteVersion;
+      subscribeToSharedRoute(id);
+    }
+    const shareUrl=new URL(window.location.href);
+    shareUrl.hash=new URLSearchParams({shared:id}).toString();
+    const url=shareUrl.toString();
+    const textMessage='🏍️ '+(current.name||'Ruta compartida')+'\n'+(current.km||'')+' · '+(current.duration||'')+'\nRuta colaborativa de Mallorca Riders. Los miembros pueden abrirla y proponer cambios.';
+    if(navigator.share){
+      try{await navigator.share({title:current.name||'Ruta compartida',text:textMessage,url})}
+      catch(error){if(error?.name!=='AbortError')alert('No se pudo abrir el menú para compartir. Puedes copiar este enlace:\n'+url)}
+    }else if(navigator.clipboard){
+      try{await navigator.clipboard.writeText(textMessage+'\n'+url);alert('Enlace colaborativo copiado. Ya puedes enviarlo por WhatsApp.')}
+      catch(_){prompt('Copia este enlace para compartir la ruta:',url)}
+    }else prompt('Copia este enlace para compartir la ruta:',url);
+    render(current);
+    setAuthStatus('✅ Ruta compartida del club. Los cambios guardados se sincronizarán para todos.');
+  }catch(error){
+    console.error('No se pudo publicar la ruta compartida',error);
+    setAuthStatus('No se pudo crear el enlace colaborativo: '+(error.message||'error'));
+    alert('No se pudo publicar la ruta. Comprueba que la actualización de colaboración esté aplicada en Supabase.\n'+(error.message||''));
   }
 }
-function loadSharedRoute(){
+function drawSharedRoute(route){
+  if(!map||!Array.isArray(route?.shape)||route.shape.length<2)return;
+  clearRoute();
+  routeLine=L.polyline(route.shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(route.shape);
+  (route.routePoints||[]).forEach((p,i)=>{
+    const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
+    routeMarkers.push(marker);
+  });
+  (route.realStops||[]).forEach(place=>{
+    const cat=place.category||{name:'Establecimiento',emoji:'📍',color:'#64748b'};
+    const popup='<b>'+escapeHtml(place.name||'Establecimiento')+'</b><br>'+escapeHtml(cat.emoji||'📍')+' '+escapeHtml(cat.name||'Establecimiento')+'<br>A '+Number(place.distanceKm||0).toFixed(1)+' km de la ruta';
+    const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
+    marker.bindTooltip((cat.emoji||'📍')+' '+escapeHtml(place.name||'Establecimiento'),{sticky:true,direction:'top',opacity:0.96});
+    routeMarkers.push(marker);
+  });
+  const bounds=routeLine.getBounds();
+  [...(route.routePoints||[]).map(p=>[p.lat,p.lon]),...(route.realStops||[]).map(p=>[p.lat,p.lon])].forEach(p=>bounds.extend(p));
+  map.fitBounds(bounds,{padding:[30,30]});
+}
+function subscribeToSharedRoute(id){
+  if(!sbClient||!id)return;
+  if(sharedRouteChannel){sbClient.removeChannel(sharedRouteChannel);sharedRouteChannel=null}
+  sharedRouteChannel=sbClient.channel('shared-route-'+id)
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'shared_routes',filter:'id=eq.'+id},payload=>{
+      const row=payload.new;
+      if(!row||Number(row.version)<=sharedRouteVersion)return;
+      if(manualMode||manualRouteActive){
+        $('mapStatus').textContent='🔔 Otro miembro ha actualizado esta ruta. Tus cambios siguen en el mapa; recarga la ruta antes de guardar para evitar sobrescribir.';
+        return;
+      }
+      applySharedRouteRow(row);
+      $('mapStatus').textContent='🔄 Un compañero ha actualizado la ruta. Ya estás viendo la última versión.';
+    }).subscribe();
+}
+function applySharedRouteRow(row){
+  const data=row?.route_geojson;
+  if(!data||!Array.isArray(data.shape))throw new Error('La ruta compartida no contiene un trazado válido.');
+  activeSharedRouteId=row.id;sharedRouteVersion=Number(row.version)||1;
+  current={...data,sharedRouteId:row.id,sharedVersion:sharedRouteVersion,realStops:Array.isArray(data.realStops)?data.realStops:(Array.isArray(row.stops)?row.stops:[]),createdBy:data.createdBy||'un miembro del club'};
+  current.realStop=current.realStops[0]||null;
+  drawSharedRoute(current);render(current);
+}
+async function openSharedRoute(id){
+  pendingSharedRouteId=id;
+  if(!sbClient||!sbSession){setAuthStatus('Inicia sesión para abrir la ruta compartida del club. Después aparecerá automáticamente.');return}
+  try{
+    setAuthStatus('Abriendo la ruta compartida…');
+    const {data,error}=await sbClient.from('shared_routes').select('id,title,region,route_type,distance_km,duration_minutes,route_geojson,stops,version,creator_id,updated_at').eq('id',id).single();
+    if(error)throw error;
+    if(!data?.route_geojson)throw new Error('La ruta compartida está vacía.');
+    applySharedRouteRow(data);subscribeToSharedRoute(id);
+    const {data:profile}=await sbClient.from('profiles').select('nickname').eq('id',data.creator_id).maybeSingle();
+    if(profile?.nickname){current.createdBy=profile.nickname;render(current)}
+    $('mapStatus').textContent='🏍️ Ruta compartida abierta · versión '+sharedRouteVersion+'. Puedes proponer cambios y guardarlos para todos.';
+    setAuthStatus('✅ Ruta del club cargada. Los cambios nuevos aparecerán automáticamente.');
+    pendingSharedRouteId=null;
+  }catch(error){
+    console.error('No se pudo abrir la ruta colaborativa',error);
+    setAuthStatus('No se pudo abrir la ruta compartida: '+(error.message||'error'));
+    $('mapStatus').textContent='⚠️ No se pudo cargar la ruta del club. Comprueba que la migración colaborativa esté aplicada en Supabase.';
+  }
+}
+function editSharedRoute(){
+  if(!current?.sharedRouteId||!current.shape?.length){alert('Abre primero una ruta compartida.');return}
+  $('region').value=current.region||'mallorca';updateRegionUI();
+  type=current.type||'Mixta';
+  document.querySelectorAll('#types .chip').forEach(chip=>chip.classList.toggle('active',chip.dataset.v===type));
+  $('curves').value=String(current.curves||3);
+  $('circle').checked=!!current.circular;
+  if(current.stop)$('stop').value=current.stop;
+  const km=routeDistanceKm(current.km),kmOptions=[80,120,160,200,250];
+  $('km').value=kmOptions.reduce((best,v)=>Math.abs(v-km)<Math.abs(best-km)?v:best,120)+' km';
+  const minutes=routeDurationMinutes(current.duration),hourOptions=[1,2,3,5,8];
+  $('duration').value=hourOptions.reduce((best,v)=>Math.abs(v*60-minutes)<Math.abs(best*60-minutes)?v:best,3)+' h';
+  manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];
+  let points=[{lat:current.shape[0][0],lon:current.shape[0][1],name:'Salida'},...(current.routePoints||[])];
+  if(points.length<2){
+    const n=current.shape.length;
+    points=[0.0,0.33,0.66,1].map((f,i)=>{const p=current.shape[Math.min(n-1,Math.round((n-1)*f))];return {lat:p[0],lon:p[1],name:i===0?'Salida':'Punto '+i}});
+  }
+  points.forEach(p=>addManualWaypoint({lat:Number(p.lat),lng:Number(p.lon)}));
+  manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');
+  $('mapStatus').textContent='✏️ Edita los puntos de la ruta compartida: arrástralos, borra alguno o toca el mapa para añadir. Después pulsa «Terminar puntos» y «Generar ruta».';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
+async function publishSharedRouteUpdate(){
+  if(!current?.sharedRouteId||!sbClient||!sbSession){alert('Inicia sesión y abre una ruta compartida para guardar cambios.');return}
+  if(!current.shape?.length||current.shape.length<2){alert('Primero genera la nueva ruta antes de guardarla.');return}
+  try{
+    setAuthStatus('Guardando la nueva versión para todos los miembros…');
+    const {data,error}=await sbClient.rpc('update_shared_route',{
+      p_route_id:current.sharedRouteId,
+      p_expected_version:sharedRouteVersion,
+      p_route_data:current
+    });
+    if(error)throw error;
+    const result=Array.isArray(data)?data[0]:data;
+    sharedRouteVersion=Number(result?.new_version)||sharedRouteVersion+1;
+    current.sharedVersion=sharedRouteVersion;current.sharedRouteId=activeSharedRouteId;
+    setAuthStatus('✅ Cambios guardados. Todos los miembros verán la versión '+sharedRouteVersion+'.');
+    $('mapStatus').textContent='✅ Ruta actualizada para todo el club · versión '+sharedRouteVersion+'.';
+    render(current);
+  }catch(error){
+    console.error('No se pudo actualizar la ruta compartida',error);
+    const message=String(error.message||error);
+    if(message.includes('VERSION_CONFLICT')){
+      alert('Otro miembro ha guardado una versión más reciente. Voy a cargarla para que no se pierdan sus cambios.');
+      await openSharedRoute(current.sharedRouteId);
+    }else{
+      alert('No se pudieron guardar los cambios para todos. '+message);
+      setAuthStatus('Error al sincronizar la ruta: '+message);
+    }
+  }
+}
+async function showSharedRouteHistory(){
+  if(!activeSharedRouteId||!sbClient||!sbSession){alert('No hay una ruta compartida abierta.');return}
+  const {data,error}=await sbClient.from('shared_route_versions').select('version,route_data,created_at').eq('route_id',activeSharedRouteId).order('version',{ascending:false}).limit(10);
+  if(error){alert('No se pudo cargar el historial: '+error.message);return}
+  if(!data?.length){alert('Todavía no hay versiones anteriores. Se guardará la primera cuando alguien modifique la ruta.');return}
+  const choice=prompt('Versiones anteriores (escribe el número para cargarla):\\n'+data.map((v,i)=>(i+1)+'. Versión '+v.version+' · '+new Date(v.created_at).toLocaleString('es-ES')).join('\\n'));
+  if(choice===null)return;
+  const selected=data[Number(choice)-1];
+  if(!selected){alert('Número de versión no válido.');return}
+  const latestVersion=sharedRouteVersion;
+  current={...selected.route_data,sharedRouteId:activeSharedRouteId,sharedVersion:latestVersion};
+  drawSharedRoute(current);render(current);
+  $('mapStatus').textContent='🕘 Versión anterior '+selected.version+' cargada. Para restaurarla para todos, pulsa «Guardar cambios para todos».';
+}
+async function loadSharedRoute(){
   const params=new URLSearchParams(window.location.hash.slice(1));
+  const sharedId=params.get('shared');
+  if(sharedId){
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sharedId)){alert('El enlace de ruta compartida no es válido.');return}
+    pendingSharedRouteId=sharedId;
+    if(sbClient&&sbSession)await openSharedRoute(sharedId);
+    else setAuthStatus('Inicia sesión para abrir la ruta compartida del club. Después aparecerá automáticamente.');
+    return;
+  }
   const encoded=params.get('route');
   if(!encoded)return;
   try{
@@ -868,24 +1007,9 @@ function loadSharedRoute(){
       requestedKm:0,requestedDuration:0,
       requestedNote:'Ruta compartida por un motero'
     };
-    clearRoute();
-    routeLine=L.polyline(shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(shape);
-    routePoints.forEach((p,i)=>{
-      const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
-      routeMarkers.push(marker);
-    });
-    sharedStops.forEach(place=>{
-      const cat=place.category||{name:'Establecimiento',emoji:'📍',color:'#64748b'};
-      const popup='<b>'+escapeHtml(place.name)+'</b><br>'+escapeHtml(cat.emoji||'📍')+' '+escapeHtml(cat.name||'Establecimiento')+'<br>A '+Number(place.distanceKm||0).toFixed(1)+' km de la ruta';
-      const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
-      marker.bindTooltip((cat.emoji||'📍')+' '+escapeHtml(place.name),{sticky:true,direction:'top',opacity:0.96});
-      routeMarkers.push(marker);
-    });
-    const bounds=routeLine.getBounds();
-    [...routePoints.map(p=>[p.lat,p.lon]),...sharedStops.map(p=>[p.lat,p.lon])].forEach(p=>bounds.extend(p));
-    map.fitBounds(bounds,{padding:[30,30]});
+    drawSharedRoute(current);
     render(current);
-    $('mapStatus').textContent='🏍️ Ruta completa compartida: trazado, '+routePoints.length+' puntos de paso y '+sharedStops.length+' establecimientos. Puedes guardarla o volver a compartirla.';
+    $('mapStatus').textContent='🏍️ Ruta importada desde un enlace anterior. Para sincronizar cambios, vuelve a compartirla con tu cuenta.';
   }catch(error){
     console.error('No se pudo abrir la ruta compartida',error);
     alert('No se ha podido abrir esta ruta compartida. Pide que te envíen un enlace nuevo.');
@@ -1103,6 +1227,8 @@ function setAuthStatus(message){const el=$('authStatus');if(el)el.textContent=me
 function setAuthUI(session){
   sbSession=session||null;
   const signedIn=!!sbSession;
+  if(!signedIn&&sharedRouteChannel&&sbClient){sbClient.removeChannel(sharedRouteChannel);sharedRouteChannel=null}
+  if(signedIn&&pendingSharedRouteId){openSharedRoute(pendingSharedRouteId)}
   $('authSignedIn').classList.toggle('hidden',!signedIn);
   $('authEmail').classList.toggle('hidden',signedIn);
   $('authPassword').classList.toggle('hidden',signedIn);
