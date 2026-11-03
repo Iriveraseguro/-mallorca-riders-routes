@@ -752,7 +752,7 @@ async function generateRoute(){
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.slice(1).map((p,i)=>({name:p.name||'Punto '+(i+2),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,sharedRouteId:activeSharedRouteId||null,sharedVersion:activeSharedRouteId?sharedRouteVersion:null};
+    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.slice(1).map((p,i)=>({name:p.name||'Punto '+(i+2),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,sharedRouteId:plan.manual&&current?.sharedRouteId?current.sharedRouteId:null,sharedVersion:plan.manual&&current?.sharedRouteId?sharedRouteVersion:null};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
@@ -799,7 +799,7 @@ async function share(){
   if(!current?.shape?.length){alert('Primero genera o abre una ruta.');return}
   if(!sbClient||!sbSession){setAuthStatus('Para crear un enlace colaborativo, inicia sesión con tu cuenta de Mallorca Riders.');alert('Inicia sesión para compartir una ruta editable con el club.');return}
   try{
-    let id=activeSharedRouteId||current.sharedRouteId||null;
+    let id=current.sharedRouteId||null;
     if(!id){
       setAuthStatus('Publicando la ruta compartida para el club…');
       const payload={
