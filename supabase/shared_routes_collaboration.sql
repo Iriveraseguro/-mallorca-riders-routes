@@ -50,10 +50,14 @@ begin
   if auth.uid() is null then
     raise exception 'Debes iniciar sesión para editar una ruta compartida.';
   end if;
-  if jsonb_typeof(p_route_data) <> 'object'
-     or jsonb_typeof(p_route_data->'shape') <> 'array'
-     or jsonb_array_length(p_route_data->'shape') < 2 then
+  if p_route_data is null or jsonb_typeof(p_route_data) is distinct from 'object' then
     raise exception 'Los datos de la ruta no son válidos.';
+  end if;
+  if jsonb_typeof(p_route_data->'shape') is distinct from 'array' then
+    raise exception 'El trazado de la ruta no es válido.';
+  end if;
+  if jsonb_array_length(p_route_data->'shape') < 2 then
+    raise exception 'El trazado necesita al menos dos puntos.';
   end if;
 
   select * into existing
