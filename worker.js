@@ -42,7 +42,7 @@ export default {
       if (!contentType.toLowerCase().includes("text/plain")) return Response.json({error:"La consulta debe enviarse como texto."},{status:415,headers});
       let query = "";
       try { query = await request.text(); } catch { return Response.json({error:"No se pudo leer la consulta."},{status:400,headers}); }
-      const prefix = "[out:json][timeout:12];(";
+      const prefix = "[out:json][timeout:20];(";
       const suffix = ");out center tags;";
       const allowedClause = /^(?:node|way|relation)\[(?:"amenity"~"\^\(restaurant\|fast_food\|cafe\|bar\|pub\|fuel\)\$"|"amenity"~"\^\(restaurant\|fast_food\)\$"|"amenity"~"\^\(cafe\|bar\|pub\)\$"|"amenity"="fuel"|"tourism"="viewpoint")\]\(around:2000,-?\d+\.\d{5},-?\d+\.\d{5}\)$/;
       const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";").filter(Boolean) : [];
@@ -62,7 +62,7 @@ export default {
           method:"POST",
           headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
           body:"data="+encodeURIComponent(query),
-          signal:AbortSignal.timeout(12500)
+          signal:AbortSignal.timeout(20000)
         });
         const body = await response.text();
         if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,140));
