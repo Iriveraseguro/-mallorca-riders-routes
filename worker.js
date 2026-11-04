@@ -82,8 +82,8 @@ export default {
       ];
       const failures = [];
       const cleanErrorBody = (body) => String(body || "")
-        .replace(/<!DOCTYPE[\\s\\S]*?>/gi, " ")
-        .replace(/<\\?xml[^>]*\\?>/gi, " ")
+        .replace(/<!DOCTYPE[\s\\S]*?>/gi, " ")
+        .replace(/<\?xml[^>]*\?>/gi, " ")
         .replace(/<[^>]+>/g, " ")
         .replace(/&nbsp;|&#160;/gi, " ")
         .replace(/&amp;/gi, "&")
@@ -91,7 +91,7 @@ export default {
         .replace(/&gt;/gi, ">")
         .replace(/&quot;/gi, '"')
         .replace(/&#39;/gi, "'")
-        .replace(/\\s+/g, " ")
+        .replace(/\s+/g, " ")
         .trim()
         .slice(0,700);
       const requestEndpoint = async (endpoint, timeoutMs, apiKey = "") => {
@@ -111,7 +111,8 @@ export default {
           });
           const body = await response.text();
           if (!response.ok) {
-            const cleanBody = cleanErrorBody(body);\n            const detail = apiKey ? cleanBody.replaceAll(apiKey, "[clave oculta]") : cleanBody;
+            const cleanBody = cleanErrorBody(body);
+            const detail = apiKey ? cleanBody.replaceAll(apiKey, "[clave oculta]") : cleanBody;
             const error = new Error(endpoint.replace("/api/interpreter","")+" respondió HTTP "+response.status+(detail?": "+detail:""));
             error.status = response.status;
             throw error;
