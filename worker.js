@@ -111,7 +111,7 @@ export default {
           });
           const body = await response.text();
           if (!response.ok) {
-            const detail = cleanErrorBody(body).replaceAll(apiKey, "[clave oculta]");
+            const cleanBody = cleanErrorBody(body);\n            const detail = apiKey ? cleanBody.replaceAll(apiKey, "[clave oculta]") : cleanBody;
             const error = new Error(endpoint.replace("/api/interpreter","")+" respondió HTTP "+response.status+(detail?": "+detail:""));
             error.status = response.status;
             throw error;
