@@ -42,19 +42,14 @@ export default {
       if (!contentType.toLowerCase().includes("text/plain")) return Response.json({error:"La consulta debe enviarse como texto."},{status:415,headers});
       let query = "";
       try { query = await request.text(); } catch { return Response.json({error:"No se pudo leer la consulta."},{status:400,headers}); }
-      const prefix = "[out:json][timeout:15];(";
+      const prefix = "[out:json][timeout:20];(";
       const suffix = ");out center tags;";
       const allowedSelectors = new Set([
-        'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-        'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-        'node["amenity"~"^(restaurant|fast_food)$"]',
-        'way["amenity"~"^(restaurant|fast_food)$"]',
-        'node["amenity"~"^(cafe|bar|pub)$"]',
-        'way["amenity"~"^(cafe|bar|pub)$"]',
-        'node["amenity"="fuel"]',
-        'way["amenity"="fuel"]',
-        'node["tourism"="viewpoint"]',
-        'way["tourism"="viewpoint"]'
+        'nw["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+        'nw["amenity"~"^(restaurant|fast_food)$"]',
+        'nw["amenity"~"^(cafe|bar|pub)$"]',
+        'nw["amenity"="fuel"]',
+        'nw["tourism"="viewpoint"]'
       ]);
       const validClause = rawClause => {
         const clause = String(rawClause || "").trim();
@@ -63,13 +58,16 @@ export default {
         if (at < 0 || !clause.endsWith(")")) return false;
         const selector = clause.slice(0, at).trim();
         const parts = clause.slice(at + marker.length, -1).split(",").map(value => value.trim());
-        if (!allowedSelectors.has(selector) || parts.length !== 3) return false;
+        if (!allowedSelectors.has(selector) || parts.length < 3 || parts.length > 129 || parts.length % 2 !== 1) return false;
         const radius = Number(parts[0]);
+        if (!Number.isInteger(radius) || radius < 500 || radius > 1800) return false;
         const coordinates = parts.slice(1);
-        if (!Number.isInteger(radius) || radius < 500 || radius > 2500) return false;
-        if (!coordinates.every(value => /^-?\d+(?:\.\d+)?$/.test(value))) return false;
-        const [lat, lon] = coordinates.map(Number);
-        return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+        if (!coordinates.every(value => /^-?\\d+(?:\\.\\d+)?$/.test(value))) return false;
+        for (let i=0;i<coordinates.length;i+=2) {
+          const lat=Number(coordinates[i]), lon=Number(coordinates[i+1]);
+          if (!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return false;
+        }
+        return true;
       };
       const hasPrefix = query.startsWith(prefix);
       const hasSuffix = query.endsWith(suffix);
