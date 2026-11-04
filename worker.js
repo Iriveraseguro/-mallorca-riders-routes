@@ -82,7 +82,7 @@ export default {
       ];
       const failures = [];
       const cleanErrorBody = (body) => String(body || "")
-        .replace(/<!DOCTYPE[\s\\S]*?>/gi, " ")
+        .replace(/<!DOCTYPE[\s\S]*?>/gi, " ")
         .replace(/<\?xml[^>]*\?>/gi, " ")
         .replace(/<[^>]+>/g, " ")
         .replace(/&nbsp;|&#160;/gi, " ")
