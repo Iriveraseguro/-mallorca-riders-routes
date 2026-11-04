@@ -62,7 +62,7 @@ export default {
         const radius = Number(parts[0]);
         if (!Number.isInteger(radius) || radius < 500 || radius > 1800) return false;
         const coordinates = parts.slice(1);
-        if (!coordinates.every(value => /^-?\\d+(?:\\.\\d+)?$/.test(value))) return false;
+        if (coordinates.some(value => value === "" || !Number.isFinite(Number(value)))) return false;
         for (let i=0;i<coordinates.length;i+=2) {
           const lat=Number(coordinates[i]), lon=Number(coordinates[i+1]);
           if (!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return false;
