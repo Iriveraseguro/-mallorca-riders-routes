@@ -15,12 +15,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate application JavaScript syntax
-        run: node --check app.js
+      - name: Validate application files and JavaScript syntax
+        run: |
+          test -s index.html
+          test -s app.js
+          test -s styles.css
+          node --check app.js
 
-      - name: Deploy only the test Worker
-        uses: cloudflare/wrangler-action@v3
+      - name: Deploy only the test Worker and its static app assets
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 4887e83dc0665be474369d9c3a64ff69
+          wranglerVersion: "4.157.0"
           command: deploy --config wrangler.jsonc --name mallorca-riders-proxy-test
