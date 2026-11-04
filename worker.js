@@ -74,41 +74,78 @@ export default {
       // Prioriza Overpass.ch con la clave privada del Worker. La clave nunca llega al navegador.
       // Si el servicio gratuito está ocupado, se prueban mirrors públicos como respaldo.
       const primary = env.OVERPASS_API_KEY
-        ? [`https://api.overpass.ch/v1/${encodeURIComponent(env.OVERPASS_API_KEY)}/interpreter`]
+        ? ["https://api.overpass.ch/v1/interpreter"]
         : [];
       const fallbackGroups = [
         ["https://overpass.private.coffee/api/interpreter","https://overpass-api.de/api/interpreter"],
         ["https://lz4.overpass-api.de/api/interpreter","https://ovp.dresel.systems/api/interpreter"]
       ];
       const failures = [];
-      const requestEndpoint = async (endpoint, timeoutMs) => {
+      const cleanErrorBody = (body) => String(body || "")
+        .replace(/<!DOCTYPE[\\s\\S]*?>/gi, " ")
+        .replace(/<\\?xml[^>]*\\?>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;|&#160;/gi, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/\\s+/g, " ")
+        .trim()
+        .slice(0,700);
+      const requestEndpoint = async (endpoint, timeoutMs, apiKey = "") => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const response = await fetch(endpoint, {
             method:"POST",
-            headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
-            body:"data="+encodeURIComponent(query),
+            headers:{
+              "Content-Type":"application/x-www-form-urlencoded;charset=UTF-8",
+              "Accept":"application/json",
+              "User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)",
+              ...(apiKey ? {"X-API-Key":apiKey} : {})
+            },
+            body:new URLSearchParams({data:query}).toString(),
             signal:controller.signal
           });
           const body = await response.text();
-          if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,120));
+          if (!response.ok) {
+            const detail = cleanErrorBody(body).replaceAll(apiKey, "[clave oculta]");
+            const error = new Error(endpoint.replace("/api/interpreter","")+" respondió HTTP "+response.status+(detail?": "+detail:""));
+            error.status = response.status;
+            throw error;
+          }
           let parsed;
-          try { parsed=JSON.parse(body); } catch { throw new Error(endpoint+" devolvió una respuesta no válida."); }
-          if (!Array.isArray(parsed.elements)) throw new Error(endpoint+" no devolvió una lista de resultados.");
+          try { parsed=JSON.parse(body); } catch {
+            const error = new Error(endpoint.replace("/api/interpreter","")+" devolvió una respuesta no válida.");
+            error.status = 502;
+            throw error;
+          }
+          if (!Array.isArray(parsed.elements)) {
+            const error = new Error(endpoint.replace("/api/interpreter","")+" no devolvió una lista de resultados.");
+            error.status = 502;
+            throw error;
+          }
           return parsed;
         } finally {
           clearTimeout(timer);
         }
       };
-      // La consulta de Overpass.ch tiene un máximo de 16 s; así queda margen
-      // para un respaldo sin acercarse al límite de duración del Worker gratuito.
+      // La clave se envía en X-API-Key: nunca aparece en la URL ni en los mensajes de error.
       if (primary.length) {
         try {
-          const parsed = await requestEndpoint(primary[0],16000);
+          const parsed = await requestEndpoint(primary[0],16000,env.OVERPASS_API_KEY);
           return Response.json(parsed,{headers});
         } catch (error) {
-          failures.push(String(error?.message||error));
+          const message = String(error?.message||error);
+          if (error?.status === 400) {
+            return Response.json({error:"Overpass ha rechazado la consulta de establecimientos.",detail:message},{status:400,headers});
+          }
+          if (error?.status === 401 || error?.status === 403) {
+            return Response.json({error:"Overpass.ch no ha aceptado la clave API configurada.",detail:message},{status:error.status,headers});
+          }
+          failures.push(message);
         }
       }
       for (const group of fallbackGroups) {
