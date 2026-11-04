@@ -615,7 +615,7 @@ async function findRealStops(coords,stop){
       samples.splice(0,samples.length,...reduced);
     }
     const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:750,'+p.lat+','+p.lon+')')).join(';');
-    const query='[out:json][timeout:15];('+clauses+');out center tags;';
+    const query='[out:json][timeout:15];('+clauses+';);out center tags;';
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),50000);
     let elements;
     try{
