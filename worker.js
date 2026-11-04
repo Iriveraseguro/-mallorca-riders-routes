@@ -42,7 +42,7 @@ export default {
       if (!contentType.toLowerCase().includes("text/plain")) return Response.json({error:"La consulta debe enviarse como texto."},{status:415,headers});
       let query = "";
       try { query = await request.text(); } catch { return Response.json({error:"No se pudo leer la consulta."},{status:400,headers}); }
-      const prefix = "[out:json][timeout:20];(";
+      const prefix = "[out:json][timeout:15];(";
       const suffix = ");out center tags;";
       const allowedSelectors = new Set([
         'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
@@ -57,7 +57,7 @@ export default {
         'way["tourism"="viewpoint"]'
       ]);
       const validClause = clause => {
-        const marker = "(around:1000,";
+        const marker = "(around:750,";
         const at = clause.lastIndexOf(marker);
         if (at < 0 || !clause.endsWith(")")) return false;
         const selector = clause.slice(0, at);
@@ -87,7 +87,7 @@ export default {
         const attempts = group.map(async endpoint => {
           const controller = new AbortController();
           controllers.push(controller);
-          const timer = setTimeout(() => controller.abort(), 7000);
+          const timer = setTimeout(() => controller.abort(), 14000);
           try {
             const response = await fetch(endpoint, {
               method:"POST",
