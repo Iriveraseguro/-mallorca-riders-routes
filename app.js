@@ -593,15 +593,15 @@ async function findRealStops(coords,stop){
   try{
     // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
     // un rectángulo enorme que incluye mucha zona ajena a la ruta.
-   const sampleCount=Math.min(stop==='all'?4:5,Math.max(3,Math.ceil(coords.length/400)));
+   const sampleCount=Math.min(4,Math.max(3,Math.ceil(coords.length/600)));
     const samples=[];
     for(let i=0;i<sampleCount;i++){
       const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
       const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:12];('+clauses+');out center tags;';
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1000,'+p.lat+','+p.lon+');')).join('');
+    const query='[out:json][timeout:20];('+clauses+');out center tags;';
     // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
     const endpoint='/api/overpass';
     let data=null;
