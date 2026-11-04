@@ -56,20 +56,33 @@ export default {
         'node["tourism"="viewpoint"]',
         'way["tourism"="viewpoint"]'
       ]);
-      const validClause = clause => {
+      const validClause = rawClause => {
+        const clause = String(rawClause || "").trim();
         const marker = "(around:750,";
         const at = clause.lastIndexOf(marker);
         if (at < 0 || !clause.endsWith(")")) return false;
-        const selector = clause.slice(0, at);
-        const coordinates = clause.slice(at + marker.length, -1).split(",");
+        const selector = clause.slice(0, at).trim();
+        const coordinates = clause.slice(at + marker.length, -1).split(",").map(value => value.trim());
         if (!allowedSelectors.has(selector) || coordinates.length !== 2) return false;
-        if (!coordinates.every(value => /^-?\d+\.\d{5}$/.test(value))) return false;
+        if (!coordinates.every(value => /^-?\\d+(?:\\.\\d+)?$/.test(value))) return false;
         const [lat, lon] = coordinates.map(Number);
         return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
       };
-      const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";").filter(Boolean) : [];
-      if (!query || query.length > 24000 || clauses.length < 1 || clauses.length > 160 || clauses.some(clause => !validClause(clause))) {
-        return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
+      const hasPrefix = query.startsWith(prefix);
+      const hasSuffix = query.endsWith(suffix);
+      const inner = hasPrefix && hasSuffix ? query.slice(prefix.length,-suffix.length) : "";
+      const clauses = inner.split(";").map(clause => clause.trim()).filter(Boolean);
+      const invalidClause = clauses.find(clause => !validClause(clause));
+      let validationError = "";
+      if (!query) validationError = "consulta vacía";
+      else if (query.length > 24000) validationError = "consulta superior a 24.000 caracteres";
+      else if (!hasPrefix) validationError = "cabecera Overpass inesperada";
+      else if (!hasSuffix) validationError = "cierre Overpass inesperado";
+      else if (clauses.length < 1) validationError = "no se encontraron elementos dentro de la unión";
+      else if (clauses.length > 160) validationError = "demasiados elementos en la unión: "+clauses.length;
+      else if (invalidClause) validationError = "elemento de consulta no permitido: "+invalidClause.slice(0,180);
+      if (validationError) {
+        return Response.json({error:"El Worker ha rechazado la consulta de establecimientos.",detail:validationError},{status:400,headers});
       }
       // Prioriza Overpass.ch con la clave privada del Worker. La clave nunca llega al navegador.
       // Si el servicio gratuito está ocupado, se prueban mirrors públicos como respaldo.
