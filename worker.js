@@ -44,9 +44,31 @@ export default {
       try { query = await request.text(); } catch { return Response.json({error:"No se pudo leer la consulta."},{status:400,headers}); }
       const prefix = "[out:json][timeout:20];(";
       const suffix = ");out center tags;";
-      const allowedClause = /^(?:node|way|relation)\[(?:"amenity"~"\^\(restaurant\|fast_food\|cafe\|bar\|pub\|fuel\)\$"|"amenity"~"\^\(restaurant\|fast_food\)\$"|"amenity"~"\^\(cafe\|bar\|pub\)\$"|"amenity"="fuel"|"tourism"="viewpoint")\]\(around:1000,-?\d+\.\d{5},-?\d+\.\d{5}\)$/;
-      const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";").filter(Boolean) : [];
-      if (!query || query.length > 24000 || clauses.length < 1 || clauses.length > 40 || clauses.some(clause => !allowedClause.test(clause))) {
+      const allowedSelectors = new Set([
+        'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+        'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+        'node["amenity"~"^(restaurant|fast_food)$"]',
+        'way["amenity"~"^(restaurant|fast_food)$"]',
+        'node["amenity"~"^(cafe|bar|pub)$"]',
+        'way["amenity"~"^(cafe|bar|pub)$"]',
+        'node["amenity"="fuel"]',
+        'way["amenity"="fuel"]',
+        'node["tourism"="viewpoint"]',
+        'way["tourism"="viewpoint"]'
+      ]);
+      const validClause = clause => {
+        const marker = "(around:1000,";
+        const at = clause.lastIndexOf(marker);
+        if (at < 0 || !clause.endsWith(")")) return false;
+        const selector = clause.slice(0, at);
+        const coordinates = clause.slice(at + marker.length, -1).split(",");
+        if (!allowedSelectors.has(selector) || coordinates.length !== 2) return false;
+        if (!coordinates.every(value => /^-?\\d+\\.\\d{5}$/.test(value))) return false;
+        const [lat, lon] = coordinates.map(Number);
+        return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+      };
+      const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";") : [];
+      if (!query || query.length > 24000 || clauses.length < 1 || clauses.length > 160 || clauses.some(clause => !validClause(clause))) {
         return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
       // Evita lanzar todos los mirrors a la vez: se prueban en grupos de dos.
