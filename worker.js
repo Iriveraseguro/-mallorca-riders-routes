@@ -150,7 +150,7 @@ export default {
       // La clave se envía en X-API-Key: nunca aparece en la URL ni en los mensajes de error.
       if (primary.length) {
         try {
-          const parsed = await requestEndpoint(primary[0],16000,env.OVERPASS_API_KEY);
+          const parsed = await requestEndpoint(primary[0],22000,env.OVERPASS_API_KEY);
           return Response.json(parsed,{headers});
         } catch (error) {
           const message = String(error?.message||error);
