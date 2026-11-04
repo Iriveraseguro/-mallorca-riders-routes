@@ -592,7 +592,7 @@ async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);
   if(!selector.length)return {places:[],error:null};
   try{
-    // Consulta ligera: un punto cada 12 km y radio de 750 m para evitar sobrecargar Overpass.
+    // Consulta más uniforme: muestreamos cada 4 km y cubrimos un radio de 2,5 km alrededor de cada muestra.
     const cumulative=[0];
     for(let i=1;i<coords.length;i++) cumulative[i]=cumulative[i-1]+distanceKm(
       {lat:coords[i-1][0],lon:coords[i-1][1]},
@@ -607,14 +607,14 @@ async function findRealStops(coords,stop){
       const p=coords[index],key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     };
-    for(let d=0;d<totalLength;d+=12)addSample(d);
+    for(let d=0;d<totalLength;d+=4)addSample(d);
     addSample(totalLength);
-    if(samples.length>16){
+    if(samples.length>40){
       const reduced=[];
-      for(let i=0;i<16;i++)reduced.push(samples[Math.round(i*(samples.length-1)/15)]);
+      for(let i=0;i<40;i++)reduced.push(samples[Math.round(i*(samples.length-1)/39)]);
       samples.splice(0,samples.length,...reduced);
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:750,'+p.lat+','+p.lon+')')).join(';');
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2500,'+p.lat+','+p.lon+')')).join(';');
     const query='[out:json][timeout:15];('+clauses+';);out center tags;';
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),50000);
     let elements;
