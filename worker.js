@@ -64,7 +64,7 @@ export default {
         const selector = clause.slice(0, at).trim();
         const coordinates = clause.slice(at + marker.length, -1).split(",").map(value => value.trim());
         if (!allowedSelectors.has(selector) || coordinates.length !== 2) return false;
-        if (!coordinates.every(value => /^-?\\d+(?:\\.\\d+)?$/.test(value))) return false;
+        if (!coordinates.every(value => /^-?\d+(?:\.\d+)?$/.test(value))) return false;
         const [lat, lon] = coordinates.map(Number);
         return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
       };
