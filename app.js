@@ -592,7 +592,7 @@ async function findRealStops(coords,stop){
   const selector=poiQueryForStop(stop);
   if(!selector.length)return {places:[],error:null};
   try{
-    // Una sola consulta Overpass con un punto de búsqueda cada 5 km.
+    // Consulta ligera: un punto cada 12 km y radio de 750 m para evitar sobrecargar Overpass.
     const cumulative=[0];
     for(let i=1;i<coords.length;i++) cumulative[i]=cumulative[i-1]+distanceKm(
       {lat:coords[i-1][0],lon:coords[i-1][1]},
@@ -607,16 +607,16 @@ async function findRealStops(coords,stop){
       const p=coords[index],key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
     };
-    for(let d=0;d<totalLength;d+=5)addSample(d);
+    for(let d=0;d<totalLength;d+=12)addSample(d);
     addSample(totalLength);
-    if(samples.length>40){
+    if(samples.length>16){
       const reduced=[];
-      for(let i=0;i<40;i++)reduced.push(samples[Math.round(i*(samples.length-1)/39)]);
+      for(let i=0;i<16;i++)reduced.push(samples[Math.round(i*(samples.length-1)/15)]);
       samples.splice(0,samples.length,...reduced);
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1000,'+p.lat+','+p.lon+')')).join(';');
-    const query='[out:json][timeout:20];('+clauses+');out center tags;';
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),27000);
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:750,'+p.lat+','+p.lon+')')).join(';');
+    const query='[out:json][timeout:15];('+clauses+');out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),50000);
     let elements;
     try{
       const res=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
@@ -629,7 +629,7 @@ async function findRealStops(coords,stop){
       if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
       elements=json.elements;
     }catch(error){
-      if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 27 segundos');
+      if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 50 segundos');
       throw error;
     }finally{clearTimeout(timer)}
     const uniqueElements=[...new Map(elements.map(el=>[el.type+'/'+el.id,el])).values()];
