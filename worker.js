@@ -58,12 +58,15 @@ export default {
       ]);
       const validClause = rawClause => {
         const clause = String(rawClause || "").trim();
-        const marker = "(around:750,";
+        const marker = "(around:";
         const at = clause.lastIndexOf(marker);
         if (at < 0 || !clause.endsWith(")")) return false;
         const selector = clause.slice(0, at).trim();
-        const coordinates = clause.slice(at + marker.length, -1).split(",").map(value => value.trim());
-        if (!allowedSelectors.has(selector) || coordinates.length !== 2) return false;
+        const parts = clause.slice(at + marker.length, -1).split(",").map(value => value.trim());
+        if (!allowedSelectors.has(selector) || parts.length !== 3) return false;
+        const radius = Number(parts[0]);
+        const coordinates = parts.slice(1);
+        if (!Number.isInteger(radius) || radius < 500 || radius > 2500) return false;
         if (!coordinates.every(value => /^-?\d+(?:\.\d+)?$/.test(value))) return false;
         const [lat, lon] = coordinates.map(Number);
         return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
