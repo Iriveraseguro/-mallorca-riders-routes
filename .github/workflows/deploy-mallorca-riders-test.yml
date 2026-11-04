@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/poi-arrows-overpass-repair-20261030
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,6 +12,8 @@ permissions:
 jobs:
   deploy-test:
     runs-on: ubuntu-latest
+    env:
+      OVERPASS_API_KEY: ${{ secrets.OVERPASS_API_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,10 +22,26 @@ jobs:
         run: |
           test -s index.html
           test -s app.js
+          test -s worker.js
           test -s styles.css
           node --check app.js
+          node --check worker.js
 
-      - name: Deploy only the test Worker and its static app assets
+      - name: Deploy test Worker with free Overpass.ch key
+        if: ${{ env.OVERPASS_API_KEY != '' }}
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: 4887e83dc0665be474369d9c3a64ff69
+          wranglerVersion: "4.157.0"
+          secrets: |
+            OVERPASS_API_KEY
+          command: deploy --config wrangler.jsonc --name mallorca-riders-proxy-test
+        env:
+          OVERPASS_API_KEY: ${{ secrets.OVERPASS_API_KEY }}
+
+      - name: Deploy test Worker without optional key
+        if: ${{ env.OVERPASS_API_KEY == '' }}
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
