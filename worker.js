@@ -53,6 +53,8 @@ export default {
       // Overpass instances can return 504/521 under load. The first valid
       // response wins, avoiding a long serial wait on a failed mirror.
       const endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
         "https://overpass.private.coffee/api/interpreter",
         "https://ovp.dresel.systems/api/interpreter",
         "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
