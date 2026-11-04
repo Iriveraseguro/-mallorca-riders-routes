@@ -67,7 +67,7 @@ export default {
         const [lat, lon] = coordinates.map(Number);
         return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
       };
-      const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";") : [];
+      const clauses = query.startsWith(prefix) && query.endsWith(suffix) ? query.slice(prefix.length,-suffix.length).split(";").filter(Boolean) : [];
       if (!query || query.length > 24000 || clauses.length < 1 || clauses.length > 160 || clauses.some(clause => !validClause(clause))) {
         return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
