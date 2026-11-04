@@ -604,7 +604,7 @@ async function findRealStops(coords,stop){
     const requests=samples.map(async p=>{
       const clauses=selector.map(q=>q+'(around:1000,'+p.lat+','+p.lon+')').join(';');
       const query='[out:json][timeout:20];('+clauses+');out center tags;';
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),23000);
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),27000);
       try{
         const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
         if(!res.ok){
