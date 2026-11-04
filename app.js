@@ -589,51 +589,55 @@ function stopIcon(stop){
   return '📍';
 }
 async function findRealStops(coords,stop){
-  const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
+  const selector=poiQueryForStop(stop);
+  if(!selector.length)return {places:[],error:null};
   try{
-    // Dividimos la búsqueda en consultas pequeñas: los Overpass públicos
-    // suelen agotar el tiempo con una consulta que cubre varios puntos.
-    const sampleCount=3;
-    const samples=[];
-    for(let i=0;i<sampleCount;i++){
-      const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
-      const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
-      if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
-    }
-    const endpoint='/api/overpass';
-    const requests=samples.map(async p=>{
-      const clauses=selector.map(q=>q+'(around:1000,'+p.lat+','+p.lon+')').join(';');
-      const query='[out:json][timeout:20];('+clauses+');out center tags;';
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),27000);
-      try{
-        const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
-        if(!res.ok){
-          let detail='';
-          try{const errData=await res.json();detail=errData.detail||errData.error||''}catch(_){}
-          throw new Error('HTTP '+res.status+(detail?' — '+detail:''));
-        }
-        const json=await res.json();
-        if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
-        return json.elements;
-      }catch(error){
-        if(error?.name==='AbortError')throw new Error('La consulta de establecimientos ha superado el tiempo límite');
-        throw error;
-      }finally{clearTimeout(timer)}
-    });
-    const results=await Promise.allSettled(requests);
-    const elements=[];
-    const failures=[];
-    results.forEach(result=>{
-      if(result.status==='fulfilled')elements.push(...result.value);
-      else failures.push(String(result.reason?.message||result.reason));
-    });
-    if(!elements.length)throw new Error(failures[0]||'ningún servidor devolvió establecimientos');
-    const uniqueElements=[...new Map(elements.map(el=>[el.type+'/'+el.id,el])).values()];
-    const candidates=uniqueElements.map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
-    const stride=Math.max(1,Math.floor(coords.length/500));
+    // Una sola consulta Overpass con un punto de búsqueda cada 5 km.
     const cumulative=[0];
-    for(let i=1;i<coords.length;i++) cumulative[i]=cumulative[i-1]+distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
-    const totalLength=cumulative[cumulative.length-1]||1;
+    for(let i=1;i<coords.length;i++) cumulative[i]=cumulative[i-1]+distanceKm(
+      {lat:coords[i-1][0],lon:coords[i-1][1]},
+      {lat:coords[i][0],lon:coords[i][1]}
+    );
+    const totalLength=cumulative[cumulative.length-1]||0;
+    if(!totalLength)return {places:[],error:null};
+    const samples=[];
+    const addSample=distance=>{
+      let index=0;
+      while(index<cumulative.length-1&&cumulative[index]<distance)index++;
+      const p=coords[index],key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
+      if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
+    };
+    for(let d=0;d<totalLength;d+=5)addSample(d);
+    addSample(totalLength);
+    if(samples.length>40){
+      const reduced=[];
+      for(let i=0;i<40;i++)reduced.push(samples[Math.round(i*(samples.length-1)/39)]);
+      samples.splice(0,samples.length,...reduced);
+    }
+    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:1000,'+p.lat+','+p.lon+')')).join(';');
+    const query='[out:json][timeout:20];('+clauses+');out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),27000);
+    let elements;
+    try{
+      const res=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+      if(!res.ok){
+        let detail='';
+        try{const errData=await res.json();detail=errData.detail||errData.error||''}catch(_){}
+        throw new Error('HTTP '+res.status+(detail?' — '+detail:''));
+      }
+      const json=await res.json();
+      if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
+      elements=json.elements;
+    }catch(error){
+      if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 27 segundos');
+      throw error;
+    }finally{clearTimeout(timer)}
+    const uniqueElements=[...new Map(elements.map(el=>[el.type+'/'+el.id,el])).values()];
+    const candidates=uniqueElements.map(el=>{
+      const tags=el.tags||{},category=placeCategory(tags);
+      return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category};
+    }).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
+    const stride=Math.max(1,Math.floor(coords.length/700));
     const places=candidates.map(c=>{
       let nearest=Infinity,nearestIndex=0;
       for(let i=0;i<coords.length;i+=stride){
@@ -641,20 +645,22 @@ async function findRealStops(coords,stop){
         if(d<nearest){nearest=d;nearestIndex=i;}
       }
       return {...c,distanceKm:nearest,routeProgress:cumulative[nearestIndex]/totalLength};
-    }).filter(c=>c.distanceKm<=3);
-    const sectorCount=10,maxPerSector=8;
-    const sectors=Array.from({length:sectorCount},()=>[]);
-    places.forEach(p=>sectors[Math.min(sectorCount-1,Math.floor(p.routeProgress*sectorCount))].push(p));
-    sectors.forEach(group=>group.sort((a,b)=>a.distanceKm-b.distanceKm));
-    const unique=[];
-    for(const group of sectors){
-      let added=0;
-      for(const p of group){
-        if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;
-        unique.push(p);if(++added>=maxPerSector)break;
-      }
-    }
-    return {places:unique,error:failures.length===results.length?failures.join(' | '):null};
+    }).filter(c=>c.distanceKm<=2);
+    // Como máximo un establecimiento por tramo de 5 km, escogiendo el más próximo.
+    const bucketCount=Math.max(1,Math.ceil(totalLength/5));
+    const buckets=Array.from({length:bucketCount},()=>[]);
+    places.forEach(p=>buckets[Math.min(bucketCount-1,Math.floor(p.routeProgress*totalLength/5))].push(p));
+    const selected=[],seen=new Set();
+    buckets.forEach(group=>{
+      group.sort((a,b)=>a.distanceKm-b.distanceKm);
+      const place=group.find(p=>{
+        const key=p.name.toLocaleLowerCase('es');
+        if(seen.has(key))return false;
+        seen.add(key);return true;
+      });
+      if(place)selected.push(place);
+    });
+    return {places:selected,error:null};
   }catch(error){
     console.warn('Error buscando establecimientos:',error);
     return {places:[],error:error?.message||'error desconocido'};
