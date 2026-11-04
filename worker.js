@@ -49,9 +49,8 @@ export default {
       if (!query || query.length > 12000 || clauses.length < 1 || clauses.length > 20 || clauses.some(clause => !allowedClause.test(clause))) {
         return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
-      // Use independent global and Europe-wide mirrors concurrently: public
-      // Overpass instances can return 504/521 under load. The first valid
-      // response wins, avoiding a long serial wait on a failed mirror.
+      // Evita lanzar todos los mirrors a la vez: se prueban en grupos de dos.
+      // Cada grupo tiene un límite corto y solo se pasa al siguiente si ambos fallan.
       const endpoints = [
         "https://overpass-api.de/api/interpreter",
         "https://lz4.overpass-api.de/api/interpreter",
@@ -59,27 +58,40 @@ export default {
         "https://ovp.dresel.systems/api/interpreter",
         "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
       ];
-      const attempts = endpoints.map(async endpoint => {
-        const response = await fetch(endpoint, {
-          method:"POST",
-          headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
-          body:"data="+encodeURIComponent(query),
-          signal:AbortSignal.timeout(20000)
+      const failures = [];
+      const groups = [endpoints.slice(0,2), endpoints.slice(2,4), endpoints.slice(4,5)];
+      for (const group of groups) {
+        const controllers = [];
+        const attempts = group.map(async endpoint => {
+          const controller = new AbortController();
+          controllers.push(controller);
+          const timer = setTimeout(() => controller.abort(), 7000);
+          try {
+            const response = await fetch(endpoint, {
+              method:"POST",
+              headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
+              body:"data="+encodeURIComponent(query),
+              signal:controller.signal
+            });
+            const body = await response.text();
+            if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,120));
+            let parsed;
+            try { parsed=JSON.parse(body); } catch { throw new Error(endpoint+" devolvió una respuesta no válida."); }
+            if (!Array.isArray(parsed.elements)) throw new Error(endpoint+" no devolvió una lista de resultados.");
+            return parsed;
+          } finally {
+            clearTimeout(timer);
+          }
         });
-        const body = await response.text();
-        if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,140));
-        let parsed;
-        try { parsed=JSON.parse(body); } catch { throw new Error(endpoint+" devolvió una respuesta no válida."); }
-        if (!Array.isArray(parsed.elements)) throw new Error(endpoint+" no devolvió una lista de resultados.");
-        return parsed;
-      });
-      try {
-        const parsed = await Promise.any(attempts);
-        return Response.json(parsed,{headers});
-      } catch (error) {
-        const failures = (error?.errors||[]).map(e=>String(e?.message||e)).join(" | ");
-        return Response.json({error:"No se pudo consultar ningún servidor de establecimientos.",detail:failures.slice(0,500)},{status:502,headers});
+        try {
+          const parsed = await Promise.any(attempts);
+          controllers.forEach(controller => controller.abort());
+          return Response.json(parsed,{headers});
+        } catch (error) {
+          (error?.errors||[error]).forEach(e => failures.push(String(e?.message||e)));
+        }
       }
+      return Response.json({error:"No se pudo consultar ningún servidor de establecimientos.",detail:failures.join(" | ").slice(0,500)},{status:502,headers});
     }
     if (url.pathname === "/api/resolve-google") {
       const headers = {"Access-Control-Allow-Origin": url.origin,"Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Accept","Vary":"Origin"};
