@@ -71,43 +71,50 @@ export default {
       if (!query || query.length > 24000 || clauses.length < 1 || clauses.length > 160 || clauses.some(clause => !validClause(clause))) {
         return Response.json({error:"Consulta Overpass vacía, demasiado grande o no permitida."},{status:400,headers});
       }
-      // Evita lanzar todos los mirrors a la vez: se prueban en grupos de dos.
-      // Cada grupo tiene un límite corto y solo se pasa al siguiente si ambos fallan.
-      const endpoints = [
-        "https://overpass-api.de/api/interpreter",
-        "https://lz4.overpass-api.de/api/interpreter",
-        "https://overpass.private.coffee/api/interpreter",
-        "https://ovp.dresel.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+      // Prioriza Overpass.ch con la clave privada del Worker. La clave nunca llega al navegador.
+      // Si el servicio gratuito está ocupado, se prueban mirrors públicos como respaldo.
+      const primary = env.OVERPASS_API_KEY
+        ? [`https://api.overpass.ch/v1/${encodeURIComponent(env.OVERPASS_API_KEY)}/interpreter`]
+        : [];
+      const fallbackGroups = [
+        ["https://overpass.private.coffee/api/interpreter","https://overpass-api.de/api/interpreter"],
+        ["https://lz4.overpass-api.de/api/interpreter","https://ovp.dresel.systems/api/interpreter"]
       ];
       const failures = [];
-      const groups = [endpoints.slice(0,2), endpoints.slice(2,4), endpoints.slice(4,5)];
-      for (const group of groups) {
-        const controllers = [];
-        const attempts = group.map(async endpoint => {
-          const controller = new AbortController();
-          controllers.push(controller);
-          const timer = setTimeout(() => controller.abort(), 14000);
-          try {
-            const response = await fetch(endpoint, {
-              method:"POST",
-              headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
-              body:"data="+encodeURIComponent(query),
-              signal:controller.signal
-            });
-            const body = await response.text();
-            if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,120));
-            let parsed;
-            try { parsed=JSON.parse(body); } catch { throw new Error(endpoint+" devolvió una respuesta no válida."); }
-            if (!Array.isArray(parsed.elements)) throw new Error(endpoint+" no devolvió una lista de resultados.");
-            return parsed;
-          } finally {
-            clearTimeout(timer);
-          }
-        });
+      const requestEndpoint = async (endpoint, timeoutMs) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(endpoint, {
+            method:"POST",
+            headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8","Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"},
+            body:"data="+encodeURIComponent(query),
+            signal:controller.signal
+          });
+          const body = await response.text();
+          if (!response.ok) throw new Error(endpoint+" respondió HTTP "+response.status+": "+body.slice(0,120));
+          let parsed;
+          try { parsed=JSON.parse(body); } catch { throw new Error(endpoint+" devolvió una respuesta no válida."); }
+          if (!Array.isArray(parsed.elements)) throw new Error(endpoint+" no devolvió una lista de resultados.");
+          return parsed;
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      // La consulta de Overpass.ch tiene un máximo de 16 s; así queda margen
+      // para un respaldo sin acercarse al límite de duración del Worker gratuito.
+      if (primary.length) {
+        try {
+          const parsed = await requestEndpoint(primary[0],16000);
+          return Response.json(parsed,{headers});
+        } catch (error) {
+          failures.push(String(error?.message||error));
+        }
+      }
+      for (const group of fallbackGroups) {
+        const attempts = group.map(endpoint => requestEndpoint(endpoint,6000));
         try {
           const parsed = await Promise.any(attempts);
-          controllers.forEach(controller => controller.abort());
           return Response.json(parsed,{headers});
         } catch (error) {
           (error?.errors||[error]).forEach(e => failures.push(String(e?.message||e)));
