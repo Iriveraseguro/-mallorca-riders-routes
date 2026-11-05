@@ -1118,6 +1118,18 @@ function maps(){
 let screenshotObjectUrl=null,screenshotReferenceActive=false;
 let screenshotMapOverlay=null,screenshotOverlayMoveMode=false,screenshotOverlayDragCleanup=null;
 
+function screenshotOverlayBounds(aspectRatio,fit=0.88){
+  if(!map)throw new Error('El mapa no está disponible.');
+  const size=map.getSize();
+  const maxWidth=size.x*fit,maxHeight=size.y*fit;
+  let width=maxWidth,height=width/aspectRatio;
+  if(height>maxHeight){height=maxHeight;width=height*aspectRatio}
+  const center=map.getCenter();
+  const pixel=map.latLngToLayerPoint(center);
+  const northWest=map.layerPointToLatLng(L.point(pixel.x-width/2,pixel.y-height/2));
+  const southEast=map.layerPointToLatLng(L.point(pixel.x+width/2,pixel.y+height/2));
+  return L.latLngBounds(southEast,northWest);
+}
 function setScreenshotOverlayMoveMode(enabled){
   screenshotOverlayMoveMode=!!enabled&&!!screenshotMapOverlay;
   const image=screenshotMapOverlay?.getElement();
@@ -1125,11 +1137,13 @@ function setScreenshotOverlayMoveMode(enabled){
     image.style.pointerEvents=screenshotOverlayMoveMode?'auto':'none';
     image.style.cursor=screenshotOverlayMoveMode?'move':'default';
     image.style.touchAction='none';
+    image.style.userSelect='none';
+    image.draggable=false;
   }
   const button=$('screenshotMoveToggle');
   if(button)button.textContent=screenshotOverlayMoveMode
-    ?'🔒 Bloquear captura y mover mapa'
-    :'↔ Activar movimiento de captura';
+    ?'🔒 Fijar captura y mover mapa'
+    :'↔ Mover captura';
 }
 function bindScreenshotOverlayDrag(overlay){
   const image=overlay?.getElement();
@@ -1173,6 +1187,7 @@ function bindScreenshotOverlayDrag(overlay){
     window.addEventListener('pointercancel',onEnd,{passive:false});
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation?.();
   };
   image.addEventListener('pointerdown',onStart);
   screenshotOverlayDragCleanup=()=>{
@@ -1187,18 +1202,23 @@ function bindScreenshotOverlayDrag(overlay){
   setScreenshotOverlayMoveMode(true);
 }
 function resizeScreenshotOverlay(factor){
-  if(!screenshotMapOverlay)return;
-  const b=screenshotMapOverlay.getBounds(),c=b.getCenter();
-  const halfLat=(b.getNorth()-b.getSouth())*factor/2;
-  const halfLng=(b.getEast()-b.getWest())*factor/2;
-  screenshotMapOverlay.setBounds([
-    [c.lat-halfLat,c.lng-halfLng],
-    [c.lat+halfLat,c.lng+halfLng]
-  ]);
+  if(!screenshotMapOverlay||!map)return;
+  const bounds=screenshotMapOverlay.getBounds();
+  const center=bounds.getCenter();
+  const northWest=map.latLngToLayerPoint(bounds.getNorthWest());
+  const southEast=map.latLngToLayerPoint(bounds.getSouthEast());
+  const width=(southEast.x-northWest.x)*factor;
+  const height=(southEast.y-northWest.y)*factor;
+  const centerPoint=map.latLngToLayerPoint(center);
+  const newNorthWest=map.layerPointToLatLng(L.point(centerPoint.x-width/2,centerPoint.y-height/2));
+  const newSouthEast=map.layerPointToLatLng(L.point(centerPoint.x+width/2,centerPoint.y+height/2));
+  screenshotMapOverlay.setBounds(L.latLngBounds(newSouthEast,newNorthWest));
 }
 function resetScreenshotOverlay(){
   if(!screenshotMapOverlay||!map)return;
-  screenshotMapOverlay.setBounds(map.getBounds());
+  const image=screenshotMapOverlay.getElement();
+  const aspect=Number(image?.naturalWidth||1)/Number(image?.naturalHeight||1);
+  screenshotMapOverlay.setBounds(screenshotOverlayBounds(aspect,0.88));
   setScreenshotOverlayMoveMode(true);
 }
 function removeScreenshotOverlay(){
@@ -1207,89 +1227,53 @@ function removeScreenshotOverlay(){
   screenshotMapOverlay=null;
   screenshotOverlayMoveMode=false;
 }
+
 async function showRouteScreenshot(file){
   if(!file)return;
   if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
-  // Desde que se elige una captura, bloquear la generación normal hasta cerrar
-  // el panel o elegir puntos geográficos reales; incluso si falla la detección.
   if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
   screenshotObjectUrl=URL.createObjectURL(file);
-  $('routeScreenshotPreview').src=screenshotObjectUrl;
+  const img=$('routeScreenshotPreview');
+  img.hidden=true;
+  img.src=screenshotObjectUrl;
   $('routeScreenshotName').textContent=file.name;
   $('routeScreenshotPanel').classList.remove('hidden');
-  const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas'),img=$('routeScreenshotPreview');
-  canvas.classList.add('hidden');canvas.style.display='none';
-  status.textContent='Analizando los colores de la captura en este dispositivo…';
-  $('mapStatus').textContent='📸 Analizando la captura localmente; no se sube a ningún servidor.';
+  const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas');
+  canvas.classList.add('hidden');
+  canvas.style.display='none';
+  status.textContent='Abriendo la captura para colocarla sobre el mapa…';
+  $('mapStatus').textContent='📸 Preparando la captura como plantilla sobre el mapa.';
   try{
-    await new Promise((resolve,reject)=>{if(img.complete&&img.naturalWidth)resolve();else{img.onload=resolve;img.onerror=()=>reject(new Error('No se pudo abrir la imagen.'))}});
+    await new Promise((resolve,reject)=>{
+      if(img.complete&&img.naturalWidth)resolve();
+      else{
+        img.onload=resolve;
+        img.onerror=()=>reject(new Error('No se pudo abrir la imagen.'));
+      }
+    });
     if(!initMap())throw new Error('El mapa no está disponible para superponer la captura.');
+    map.invalidateSize({pan:false});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     removeScreenshotOverlay();
-    screenshotMapOverlay=L.imageOverlay(screenshotObjectUrl,map.getBounds(),{opacity:0.55,interactive:true,zIndex:450}).addTo(map);
+    const aspect=img.naturalWidth/Math.max(1,img.naturalHeight);
+    const bounds=screenshotOverlayBounds(aspect,0.88);
+    screenshotMapOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{
+      opacity:0.55,
+      interactive:true,
+      zIndex:450
+    }).addTo(map);
     screenshotReferenceActive=true;
     if($('screenshotOpacity'))$('screenshotOpacity').value='55';
     bindScreenshotOverlayDrag(screenshotMapOverlay);
-    status.textContent='🗺️ Captura superpuesta al mapa. Arrástrala para alinear carreteras y ajusta transparencia o tamaño.';
-    const maxSide=1100,scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
-    const w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));
-    canvas.width=w;canvas.height=h;
-    const ctx=canvas.getContext('2d',{willReadFrequently:true});
-    ctx.drawImage(img,0,0,w,h);
-    const frame=ctx.getImageData(0,0,w,h),d=frame.data;
-    const totalPixels=w*h,blue=new Uint8Array(totalPixels),visited=new Uint8Array(totalPixels);
-    // Primero aislamos píxeles azulados y después buscamos grupos conectados.
-    // Así evitamos resaltar todos los iconos azules dispersos del mapa.
-    let blueHits=0;
-    for(let p=0;p<totalPixels;p++){
-      const i=p*4,r=d[i],g=d[i+1],b=d[i+2];
-      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){blue[p]=1;blueHits++}
-    }
-    const stack=new Int32Array(totalPixels);
-    let components=[],largest=0;
-    for(let p=0;p<totalPixels;p++){
-      if(!blue[p]||visited[p])continue;
-      let top=0;stack[top++]=p;visited[p]=1;
-      const pixels=[];let minX=w,minY=h,maxX=0,maxY=0;
-      while(top){
-        const q=stack[--top],x=q%w,y=(q/w)|0;
-        pixels.push(q);if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;
-        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-          if(!dx&&!dy)continue;
-          const nx=x+dx,ny=y+dy;if(nx<0||nx>=w||ny<0||ny>=h)continue;
-          const n=ny*w+nx;if(blue[n]&&!visited[n]){visited[n]=1;stack[top++]=n}
-        }
-      }
-      if(pixels.length>largest)largest=pixels.length;
-      components.push({pixels,size:pixels.length,minX,minY,maxX,maxY});
-    }
-    if(blueHits<Math.max(45,totalPixels*0.00008)||!components.length){
-      status.textContent='No he podido detectar un trazado azul suficientemente claro. No se ha creado ninguna ruta.';
-      $('mapStatus').textContent='⚠️ No se ha detectado una línea azul fiable.';
-      return;
-    }
-    // Conservamos el componente principal y solo segmentos grandes relacionados
-    // por tamaño; los iconos aislados y pequeños quedan fuera.
-    const keep=components.filter(c=>c.size>=Math.max(8,largest*0.10)).sort((a,b)=>b.size-a.size).slice(0,18);
-    const selected=new Uint8Array(totalPixels);let hits=0,minX=w,minY=h,maxX=0,maxY=0;
-    for(const c of keep)for(const q of c.pixels){selected[q]=1;hits++;const x=q%w,y=(q/w)|0;if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y}
-    if(!hits){status.textContent='No he podido separar la línea principal del mapa.';return}
-    const mask=ctx.createImageData(w,h),md=mask.data;
-    for(let p=0;p<totalPixels;p++)if(selected[p]){const i=p*4;md[i]=255;md[i+1]=30;md[i+2]=190;md[i+3]=220}
-    canvas.style.backgroundImage='url("'+screenshotObjectUrl+'")';
-    canvas.style.backgroundSize='100% 100%';
-    canvas.style.backgroundRepeat='no-repeat';
-    canvas.style.backgroundColor='transparent';
-    ctx.clearRect(0,0,w,h);
-    ctx.putImageData(mask,0,0);
-    canvas.classList.remove('hidden');canvas.style.display='block';
-    screenshotReferenceActive=true;
-    status.textContent='He aislado '+hits.toLocaleString('es-ES')+' píxeles conectados del posible trazado azul y los he resaltado en magenta. Esto aún no identifica su ubicación GPS.';
-    $('mapStatus').textContent='🧭 Captura analizada. Para evitar una ruta en otra zona, no se usará esta imagen como si contuviera coordenadas GPS. Importa un enlace/GPX o coloca puntos sobre el mapa.';
+    status.textContent='✅ Captura colocada sin deformar. Arrástrala encima del mapa para alinear carreteras; ajusta transparencia y tamaño.';
+    $('mapStatus').textContent='🗺️ Arrastra la captura desde su interior. Cuando encaje, pulsa «Marcar puntos sobre el mapa».';
   }catch(err){
-    status.textContent='No se pudo analizar la imagen: '+(err.message||'error desconocido');
-    $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
+    screenshotReferenceActive=false;
+    status.textContent='No se pudo colocar la captura: '+(err.message||'error desconocido');
+    $('mapStatus').textContent='⚠️ No se pudo superponer la captura al mapa.';
   }
 }
+
 function closeRouteScreenshot(){
   screenshotReferenceActive=false;
   removeScreenshotOverlay();
