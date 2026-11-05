@@ -13,3 +13,14 @@
 
 /* Flechas azules que indican el sentido de circulación en cada ruta. */
 .route-direction-icon{background:transparent!important;border:0!important;pointer-events:none!important}.route-direction-arrow{display:block;width:24px;height:24px;color:#1683ff;font-size:24px;line-height:24px;font-weight:900;text-align:center;text-shadow:-1px -1px 2px #fff,1px 1px 2px #fff,0 0 5px #fff;transform-origin:50% 50%;}
+
+
+/* Botones directos para compartir rutas por WhatsApp y Telegram. */
+.share-panel{margin-top:14px;padding:14px;border:1px solid #3b3b40;border-radius:12px;background:#1c1c1f}
+.share-panel>b{display:block;margin-bottom:6px}
+.share-panel .note{line-height:1.5;margin:6px 0 10px}
+.share-channels{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.share-channel{display:flex;align-items:center;justify-content:center;min-height:44px;text-align:center;text-decoration:none}
+.share-channel.whatsapp-link{background:#176b3a}
+.share-channel.telegram-link{background:#1769aa}
+.share-copy{width:100%;cursor:pointer}
