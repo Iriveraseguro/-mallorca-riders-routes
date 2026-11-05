@@ -24,3 +24,18 @@
 .share-channel.whatsapp-link{background:#176b3a}
 .share-channel.telegram-link{background:#1769aa}
 .share-copy{width:100%;cursor:pointer}
+
+
+/* Controles de la captura georreferenciada sobre el mapa. */
+.screenshot-overlay-controls{margin:10px 0 12px;padding:12px;background:#202023;border:1px solid #3b3b40;border-radius:12px}
+.screenshot-overlay-controls label{display:block;font-size:13px;font-weight:700;margin-bottom:8px}
+.screenshot-overlay-controls input[type="range"]{display:block;width:100%;accent-color:#1683ff;margin:4px 0 12px}
+.screenshot-overlay-buttons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:8px 0}
+.screenshot-overlay-buttons .map-button{white-space:normal;padding:10px 6px}
+#screenshotMoveToggle{width:100%;white-space:normal;margin-top:4px}
+#routeScreenshotPreview[hidden]{display:none!important}
+.leaflet-image-layer.leaflet-interactive{touch-action:none}
+@media(max-width:480px){
+  .screenshot-overlay-buttons{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .screenshot-overlay-buttons .map-button{font-size:12px}
+}
