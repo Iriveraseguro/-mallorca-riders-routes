@@ -782,7 +782,47 @@ async function generateRoute(){
 $('generate').onclick=generateRoute;
 
 
-function render(r){$('result').classList.remove('hidden');const sharedActions=r.sharedRouteId?'<button class="secondary" onclick="editSharedRoute()">✏️ Proponer cambios</button><button class="secondary" onclick="publishSharedRouteUpdate()">💾 Guardar cambios para todos</button><button class="secondary" onclick="showSharedRouteHistory()">🕘 Versiones anteriores</button>':'';$('result').innerHTML=`<h2>🏍️ ${escapeHtml(r.name)}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${escapeHtml(r.createdBy||'un motero')} · ${r.circular?'ruta circular':'ruta lineal'}${r.sharedRouteId?' · Ruta compartida del club':''}</small><div class="stats"><div class="stat"><b>${escapeHtml(r.km||'')}</b><small>distancia real</small></div><div class="stat"><b>${escapeHtml(r.duration||'')}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(Math.max(1,Math.min(5,Number(r.curves)||3)))}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.')))}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions">${sharedActions}<button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
+function render(r){
+  $('result').classList.remove('hidden');
+  const sharedActions=r.sharedRouteId
+    ? '<button class="secondary" onclick="editSharedRoute()">✏️ Proponer cambios</button><button class="secondary" onclick="publishSharedRouteUpdate()">💾 Guardar cambios para todos</button><button class="secondary" onclick="showSharedRouteHistory()">🕘 Versiones anteriores</button>'
+    : '';
+  let sharePanel='';
+  if(r.sharedRouteId){
+    const links=getSharedRouteShareLinks(r);
+    sharePanel=
+      '<div class="share-panel">'+
+        '<b>📲 Compartir esta ruta</b>'+
+        '<p class="note">Elige el grupo de WhatsApp o Telegram al que quieres enviarla.</p>'+
+        '<div class="share-channels">'+
+          '<a class="secondary share-channel whatsapp-link" href="'+links.whatsappUrl+'" target="_blank" rel="noopener noreferrer">🟢 WhatsApp</a>'+
+          '<a class="secondary share-channel telegram-link" href="'+links.telegramUrl+'" target="_blank" rel="noopener noreferrer">✈️ Telegram</a>'+
+        '</div>'+
+        '<button class="secondary share-copy" type="button" onclick="copySharedRouteLink()">🔗 Copiar enlace</button>'+
+      '</div>';
+  }
+  $('result').innerHTML=
+    '<h2>🏍️ '+escapeHtml(r.name)+'</h2>'+
+    '<small>📍 '+(r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region))+
+    ' · Creada por '+escapeHtml(r.createdBy||'un motero')+
+    ' · '+(r.circular?'ruta circular':'ruta lineal')+
+    (r.sharedRouteId?' · Ruta compartida del club':'')+'</small>'+
+    '<div class="stats">'+
+      '<div class="stat"><b>'+escapeHtml(r.km||'')+'</b><small>distancia real</small></div>'+
+      '<div class="stat"><b>'+escapeHtml(r.duration||'')+'</b><small>tiempo estimado</small></div>'+
+      '<div class="stat"><b>'+'🔥'.repeat(Math.max(1,Math.min(5,Number(r.curves)||3)))+'</b><small>curvas</small></div>'+
+    '</div>'+
+    '<div class="stop">'+(r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.'))))+'</div>'+
+    '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div>'+
+    '<div class="actions">'+sharedActions+
+      '<button class="secondary" onclick="save()">💾 Guardar</button>'+
+      '<button class="secondary" onclick="share()">📤 Compartir</button>'+
+      '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
+      '<button class="secondary" onclick="document.getElementById(\'generate\').click()">🔄 Otra ruta</button>'+
+    '</div>'+
+    sharePanel;
+  $('result').scrollIntoView({behavior:'smooth'});
+}
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
@@ -827,28 +867,48 @@ async function share(){
       };
       const {data,error}=await sbClient.from('shared_routes').insert(payload).select('id,version').single();
       if(error)throw error;
-      id=data.id;sharedRouteVersion=Number(data.version)||1;activeSharedRouteId=id;current.sharedRouteId=id;current.sharedVersion=sharedRouteVersion;
+      id=data.id;
+      sharedRouteVersion=Number(data.version)||1;
+      activeSharedRouteId=id;
+      current.sharedRouteId=id;
+      current.sharedVersion=sharedRouteVersion;
       subscribeToSharedRoute(id);
     }
-    const shareUrl=new URL(window.location.href);
-    shareUrl.hash=new URLSearchParams({shared:id}).toString();
-    const url=shareUrl.toString();
-    const textMessage='🏍️ '+(current.name||'Ruta compartida')+'\n'+(current.km||'')+' · '+(current.duration||'')+'\nRuta colaborativa de Mallorca Riders. Los miembros pueden abrirla y proponer cambios.';
-    if(navigator.share){
-      try{await navigator.share({title:current.name||'Ruta compartida',text:textMessage,url})}
-      catch(error){if(error?.name!=='AbortError')alert('No se pudo abrir el menú para compartir. Puedes copiar este enlace:\n'+url)}
-    }else if(navigator.clipboard){
-      try{await navigator.clipboard.writeText(textMessage+'\n'+url);alert('Enlace colaborativo copiado. Ya puedes enviarlo por WhatsApp.')}
-      catch(_){prompt('Copia este enlace para compartir la ruta:',url)}
-    }else prompt('Copia este enlace para compartir la ruta:',url);
     render(current);
-    setAuthStatus('✅ Ruta compartida del club. Los cambios guardados se sincronizarán para todos.');
+    setAuthStatus('✅ Ruta publicada. Elige WhatsApp o Telegram en el panel de compartir.');
   }catch(error){
     console.error('No se pudo publicar la ruta compartida',error);
     setAuthStatus('No se pudo crear el enlace colaborativo: '+(error.message||'error'));
     alert('No se pudo publicar la ruta. Comprueba que la actualización de colaboración esté aplicada en Supabase.\n'+(error.message||''));
   }
 }
+
+function getSharedRouteShareLinks(route=current){
+  if(!route?.sharedRouteId)return null;
+  const shareUrl=new URL(window.location.href);
+  shareUrl.hash=new URLSearchParams({shared:route.sharedRouteId}).toString();
+  const url=shareUrl.toString();
+  const details=[route.km||'',route.duration||''].filter(Boolean).join(' · ');
+  const message='🏍️ '+(route.name||'Ruta compartida')+(details?'\n'+details:'')+'\nRuta colaborativa de Mallorca Riders. Los miembros pueden abrirla y proponer cambios.';
+  return {
+    url,
+    whatsappUrl:'https://wa.me/?text='+encodeURIComponent(message+'\n'+url),
+    telegramUrl:'https://t.me/share/url?url='+encodeURIComponent(url)+'&text='+encodeURIComponent(message),
+    copyText:message+'\n'+url
+  };
+}
+async function copySharedRouteLink(){
+  const links=getSharedRouteShareLinks();
+  if(!links){alert('Primero publica la ruta para obtener el enlace.');return}
+  try{
+    if(!navigator.clipboard?.writeText)throw new Error('El portapapeles no está disponible.');
+    await navigator.clipboard.writeText(links.copyText);
+    setAuthStatus('✅ Enlace copiado. Ya puedes pegarlo en WhatsApp o Telegram.');
+  }catch(error){
+    prompt('Copia este mensaje y enlace para compartir la ruta:',links.copyText);
+  }
+}
+
 function drawSharedRoute(route){
   if(!map||!Array.isArray(route?.shape)||route.shape.length<2)return;
   clearRoute();
