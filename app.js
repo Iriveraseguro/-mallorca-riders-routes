@@ -805,7 +805,7 @@ function encodePolyline6(coords){
 let pendingSharedRouteId=null,activeSharedRouteId=null,sharedRouteVersion=0,sharedRouteChannel=null;
 let editingSharedRoute=false;
 function routeDistanceKm(value){return Number(String(value||'0').replace(/[^0-9,.]/g,'').replace(',','.'))||0}
-function routeDurationMinutes(value){const t=String(value||'');const h=t.match(/(\\d+)\\s*h/),m=t.match(/(\\d+)\\s*min/);return Number(h?.[1]||0)*60+Number(m?.[1]||0)}
+function routeDurationMinutes(value){const t=String(value||'');const h=t.match(/(\d+)\s*h/),m=t.match(/(\d+)\s*min/);return Number(h?.[1]||0)*60+Number(m?.[1]||0)}
 async function share(){
   if(!current?.shape?.length){alert('Primero genera o abre una ruta.');return}
   if(!sbClient||!sbSession){setAuthStatus('Para crear un enlace colaborativo, inicia sesión con tu cuenta de Mallorca Riders.');alert('Inicia sesión para compartir una ruta editable con el club.');return}
