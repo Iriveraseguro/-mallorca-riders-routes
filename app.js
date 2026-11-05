@@ -159,8 +159,8 @@ function addManualWaypoint(latlng){
   manualMarkers.push(marker);refreshManualPointLabels();marker.openPopup();manualRouteActive=false;
   $('mapStatus').textContent='📍 '+manualWaypoints.length+' punto(s) colocados. Toca un punto para borrarlo individualmente. Añade al menos 2 y pulsa «Terminar puntos».';
 }
-function startManualRoute(){editingSharedRoute=false;manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
-function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
+function startManualRoute(){editingSharedRoute=false;manualMode=true;manualRouteActive=false;setScreenshotOverlayMoveMode(false);$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
+function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');setScreenshotOverlayMoveMode(false);if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
 function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
 
 const PENINSULA={
@@ -336,6 +336,11 @@ function initApp(){
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
+  $('screenshotOpacity').oninput=e=>{if(screenshotMapOverlay)screenshotMapOverlay.setOpacity(Number(e.target.value)/100)};
+  $('screenshotScaleDown').onclick=()=>resizeScreenshotOverlay(0.90);
+  $('screenshotScaleUp').onclick=()=>resizeScreenshotOverlay(1.10);
+  $('screenshotResetOverlay').onclick=resetScreenshotOverlay;
+  $('screenshotMoveToggle').onclick=()=>setScreenshotOverlayMoveMode(!screenshotOverlayMoveMode);
   $('screenshotImportAlternatives').onclick=()=>{
     const panel=$('importRoutePanel');
     if(panel){panel.classList.remove('hidden');panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink')?.focus({preventScroll:true});}
@@ -1111,6 +1116,97 @@ function maps(){
   $('mapStatus').textContent='🗺️ Abriendo Google Maps con origen, destino y hasta 3 puntos intermedios. Google puede recalcular algunos tramos.';
 }
 let screenshotObjectUrl=null,screenshotReferenceActive=false;
+let screenshotMapOverlay=null,screenshotOverlayMoveMode=false,screenshotOverlayDragCleanup=null;
+
+function setScreenshotOverlayMoveMode(enabled){
+  screenshotOverlayMoveMode=!!enabled&&!!screenshotMapOverlay;
+  const image=screenshotMapOverlay?.getElement();
+  if(image){
+    image.style.pointerEvents=screenshotOverlayMoveMode?'auto':'none';
+    image.style.cursor=screenshotOverlayMoveMode?'move':'default';
+    image.style.touchAction='none';
+  }
+  const button=$('screenshotMoveToggle');
+  if(button)button.textContent=screenshotOverlayMoveMode
+    ?'🔒 Bloquear captura y mover mapa'
+    :'↔ Activar movimiento de captura';
+}
+function bindScreenshotOverlayDrag(overlay){
+  const image=overlay?.getElement();
+  if(!image||!map)return;
+  let drag=null;
+  const onMove=event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    const point=map.mouseEventToLatLng(event);
+    const dLat=point.lat-drag.start.lat,dLng=point.lng-drag.start.lng;
+    const b=drag.bounds;
+    overlay.setBounds([
+      [b.getSouth()+dLat,b.getWest()+dLng],
+      [b.getNorth()+dLat,b.getEast()+dLng]
+    ]);
+    event.preventDefault();
+  };
+  const onEnd=event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    const state=drag;drag=null;
+    window.removeEventListener('pointermove',onMove);
+    window.removeEventListener('pointerup',onEnd);
+    window.removeEventListener('pointercancel',onEnd);
+    try{if(image.hasPointerCapture(event.pointerId))image.releasePointerCapture(event.pointerId)}catch(_){}
+    if(state.mapWasDraggable&&map&&!map.dragging.enabled())map.dragging.enable();
+    event.preventDefault();
+  };
+  const onStart=event=>{
+    if(!screenshotOverlayMoveMode||!map)return;
+    if(event.pointerType==='mouse'&&event.button!==0)return;
+    const mapWasDraggable=map.dragging.enabled();
+    drag={
+      pointerId:event.pointerId,
+      start:map.mouseEventToLatLng(event),
+      bounds:overlay.getBounds(),
+      mapWasDraggable
+    };
+    if(mapWasDraggable)map.dragging.disable();
+    try{image.setPointerCapture(event.pointerId)}catch(_){}
+    window.addEventListener('pointermove',onMove,{passive:false});
+    window.addEventListener('pointerup',onEnd,{passive:false});
+    window.addEventListener('pointercancel',onEnd,{passive:false});
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  image.addEventListener('pointerdown',onStart);
+  screenshotOverlayDragCleanup=()=>{
+    image.removeEventListener('pointerdown',onStart);
+    window.removeEventListener('pointermove',onMove);
+    window.removeEventListener('pointerup',onEnd);
+    window.removeEventListener('pointercancel',onEnd);
+    if(drag?.mapWasDraggable&&map&&!map.dragging.enabled())map.dragging.enable();
+    drag=null;
+  };
+  image.style.touchAction='none';
+  setScreenshotOverlayMoveMode(true);
+}
+function resizeScreenshotOverlay(factor){
+  if(!screenshotMapOverlay)return;
+  const b=screenshotMapOverlay.getBounds(),c=b.getCenter();
+  const halfLat=(b.getNorth()-b.getSouth())*factor/2;
+  const halfLng=(b.getEast()-b.getWest())*factor/2;
+  screenshotMapOverlay.setBounds([
+    [c.lat-halfLat,c.lng-halfLng],
+    [c.lat+halfLat,c.lng+halfLng]
+  ]);
+}
+function resetScreenshotOverlay(){
+  if(!screenshotMapOverlay||!map)return;
+  screenshotMapOverlay.setBounds(map.getBounds());
+  setScreenshotOverlayMoveMode(true);
+}
+function removeScreenshotOverlay(){
+  if(screenshotOverlayDragCleanup){screenshotOverlayDragCleanup();screenshotOverlayDragCleanup=null}
+  if(screenshotMapOverlay&&map)map.removeLayer(screenshotMapOverlay);
+  screenshotMapOverlay=null;
+  screenshotOverlayMoveMode=false;
+}
 async function showRouteScreenshot(file){
   if(!file)return;
   if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
@@ -1127,6 +1223,13 @@ async function showRouteScreenshot(file){
   $('mapStatus').textContent='📸 Analizando la captura localmente; no se sube a ningún servidor.';
   try{
     await new Promise((resolve,reject)=>{if(img.complete&&img.naturalWidth)resolve();else{img.onload=resolve;img.onerror=()=>reject(new Error('No se pudo abrir la imagen.'))}});
+    if(!initMap())throw new Error('El mapa no está disponible para superponer la captura.');
+    removeScreenshotOverlay();
+    screenshotMapOverlay=L.imageOverlay(screenshotObjectUrl,map.getBounds(),{opacity:0.55,interactive:true,zIndex:450}).addTo(map);
+    screenshotReferenceActive=true;
+    if($('screenshotOpacity'))$('screenshotOpacity').value='55';
+    bindScreenshotOverlayDrag(screenshotMapOverlay);
+    status.textContent='🗺️ Captura superpuesta al mapa. Arrástrala para alinear carreteras y ajusta transparencia o tamaño.';
     const maxSide=1100,scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
     const w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));
     canvas.width=w;canvas.height=h;
@@ -1189,6 +1292,7 @@ async function showRouteScreenshot(file){
 }
 function closeRouteScreenshot(){
   screenshotReferenceActive=false;
+  removeScreenshotOverlay();
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
   if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
