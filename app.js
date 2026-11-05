@@ -1117,6 +1117,26 @@ function maps(){
 }
 let screenshotObjectUrl=null,screenshotReferenceActive=false;
 let screenshotMapOverlay=null,screenshotOverlayMoveMode=false,screenshotOverlayDragCleanup=null;
+let screenshotRemoveControl=null,screenshotRemoveButton=null;
+function updateScreenshotRemoveControl(visible){if(screenshotRemoveButton)screenshotRemoveButton.hidden=!visible}
+function ensureScreenshotRemoveControl(){
+  if(!map||screenshotRemoveControl)return;
+  const RemoveControl=L.Control.extend({onAdd:function(){
+    const button=L.DomUtil.create('button','screenshot-remove-map-button');
+    button.type='button';
+    button.textContent='✕ Quitar captura';
+    button.setAttribute('aria-label','Quitar la captura sin borrar los puntos marcados');
+    button.title='Quitar la captura; los puntos marcados se conservan';
+    button.style.cssText='background:#1683ff;color:#fff;border:2px solid #fff;border-radius:9px;padding:9px 11px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.45);cursor:pointer';
+    button.hidden=true;
+    L.DomEvent.disableClickPropagation(button);
+    L.DomEvent.disableScrollPropagation(button);
+    button.addEventListener('click',closeRouteScreenshot);
+    screenshotRemoveButton=button;
+    return button;
+  }});
+  screenshotRemoveControl=new RemoveControl({position:'topright'}).addTo(map);
+}
 
 function screenshotOverlayBounds(aspectRatio,fit=0.88){
   if(!map)throw new Error('El mapa no está disponible.');
@@ -1226,6 +1246,7 @@ function removeScreenshotOverlay(){
   if(screenshotMapOverlay&&map)map.removeLayer(screenshotMapOverlay);
   screenshotMapOverlay=null;
   screenshotOverlayMoveMode=false;
+  updateScreenshotRemoveControl(false);
 }
 
 async function showRouteScreenshot(file){
@@ -1252,6 +1273,7 @@ async function showRouteScreenshot(file){
       }
     });
     if(!initMap())throw new Error('El mapa no está disponible para superponer la captura.');
+    ensureScreenshotRemoveControl();
     map.invalidateSize({pan:false});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     removeScreenshotOverlay();
@@ -1265,21 +1287,33 @@ async function showRouteScreenshot(file){
     screenshotReferenceActive=true;
     if($('screenshotOpacity'))$('screenshotOpacity').value='55';
     bindScreenshotOverlayDrag(screenshotMapOverlay);
+    updateScreenshotRemoveControl(true);
     status.textContent='✅ Captura colocada sin deformar. Arrástrala encima del mapa para alinear carreteras; ajusta transparencia y tamaño.';
     $('mapStatus').textContent='🗺️ Arrastra la captura desde su interior. Cuando encaje, pulsa «Marcar puntos sobre el mapa».';
   }catch(err){
     screenshotReferenceActive=false;
+    updateScreenshotRemoveControl(false);
     status.textContent='No se pudo colocar la captura: '+(err.message||'error desconocido');
     $('mapStatus').textContent='⚠️ No se pudo superponer la captura al mapa.';
   }
 }
 
 function closeRouteScreenshot(){
+  const hadCapture=!!screenshotMapOverlay||!!screenshotObjectUrl;
   screenshotReferenceActive=false;
   removeScreenshotOverlay();
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
   if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
+  if(hadCapture){
+    const count=manualWaypoints.length;
+    $('mapStatus').textContent=count
+      ?'✅ Captura retirada. Se conservan los '+count+' puntos que has marcado. Pulsa «Generar ruta» cuando estés listo.'
+      :'✅ Captura retirada del mapa.';
+    if($('routeTraceStatus'))$('routeTraceStatus').textContent=count
+      ?'Captura retirada; tus '+count+' puntos manuales siguen en el mapa.'
+      :'Captura retirada del mapa.';
+  }
 }
 async function loadGoogleMapsLink(){
   const raw=$('googleMapsLink').value.trim();
