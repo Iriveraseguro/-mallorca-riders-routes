@@ -80,7 +80,7 @@ $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latit
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
 const APP_VERSION='v5.3';
-const VALHALLA_URL='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev';
+const VALHALLA_URL='/api/route';
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
 function destinationPoint(lat,lon,distanceKm,bearingDeg){
@@ -96,33 +96,34 @@ function clearRoute(){if(!map) return; if(routeLine){map.removeLayer(routeLine);
 // de la geometría, por lo que funcionan igual en rutas generadas, importadas y compartidas.
 function addDirectionalArrows(coords){
   if(!map||!Array.isArray(coords)||coords.length<3)return;
-  let total=0,segments=[];
+  const segments=[];let total=0;
   for(let i=1;i<coords.length;i++){
     const a=coords[i-1],b=coords[i];
     const length=distanceKm({lat:a[0],lon:a[1]},{lat:b[0],lon:b[1]});
-    if(!Number.isFinite(length)||length<=0)continue;
-    segments.push({a,b,length,start:total,end:total+length});
-    total+=length;
+    if(!Number.isFinite(length)||length<0.003)continue;
+    segments.push({a,b,start:total,end:total+length,length});total+=length;
   }
   if(!segments.length||total<1)return;
-  const spacing=total<18?Math.max(5,total/3):Math.max(7,Math.min(14,total/8));
-  for(let target=spacing/2;target<total-spacing/4;target+=spacing){
-    const seg=segments.find(s=>target>=s.start&&target<=s.end);
-    if(!seg)continue;
-    const fraction=(target-seg.start)/seg.length;
-    const lat=seg.a[0]+(seg.b[0]-seg.a[0])*fraction;
-    const lon=seg.a[1]+(seg.b[1]-seg.a[1])*fraction;
-    const pa=map.latLngToLayerPoint([seg.a[0],seg.a[1]]);
-    const pb=map.latLngToLayerPoint([seg.b[0],seg.b[1]]);
-    const angle=Math.atan2(pb.y-pa.y,pb.x-pa.x)*180/Math.PI;
+  const pointAt=distance=>{
+    const d=Math.max(0,Math.min(total,distance));
+    const s=segments.find(x=>d>=x.start&&d<=x.end)||segments[segments.length-1];
+    const f=s.length?(d-s.start)/s.length:0;
+    return [s.a[0]+(s.b[0]-s.a[0])*f,s.a[1]+(s.b[1]-s.a[1])*f];
+  };
+  const spacing=Math.max(8,Math.min(14,total/Math.max(2,Math.floor(total/10))));
+  for(let target=spacing/2;target<total-spacing/3;target+=spacing){
+    const position=pointAt(target);
+    // La orientación se calcula con una tangente suavizada de unos 160 m,
+    // no con un segmento diminuto que pueda hacer zigzaguear las flechas.
+    const before=map.latLngToLayerPoint(pointAt(Math.max(0,target-0.08)));
+    const after=map.latLngToLayerPoint(pointAt(Math.min(total,target+0.08)));
+    const angle=Math.atan2(after.y-before.y,after.x-before.x)*180/Math.PI;
     const icon=L.divIcon({
       className:'route-direction-icon',
       html:'<span class="route-direction-arrow" style="transform:rotate('+angle.toFixed(1)+'deg)">➤</span>',
-      iconSize:[24,24],
-      iconAnchor:[12,12]
+      iconSize:[24,24],iconAnchor:[12,12]
     });
-    const marker=L.marker([lat,lon],{icon,interactive:false,keyboard:false,zIndexOffset:500}).addTo(map);
-    routeMarkers.push(marker);
+    routeMarkers.push(L.marker(position,{icon,interactive:false,keyboard:false,zIndexOffset:500}).addTo(map));
   }
 }
 function refreshManualPointLabels(){
@@ -158,8 +159,8 @@ function addManualWaypoint(latlng){
   manualMarkers.push(marker);refreshManualPointLabels();marker.openPopup();manualRouteActive=false;
   $('mapStatus').textContent='📍 '+manualWaypoints.length+' punto(s) colocados. Toca un punto para borrarlo individualmente. Añade al menos 2 y pulsa «Terminar puntos».';
 }
-function startManualRoute(){manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
-function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
+function startManualRoute(){editingSharedRoute=false;manualMode=true;manualRouteActive=false;setScreenshotOverlayMoveMode(false);$('manualMode').classList.add('active');$('mapStatus').textContent='👆 Toca el mapa para colocar los puntos en el orden del recorrido.'}
+function finishManualRoute(){manualMode=false;$('manualMode').classList.remove('active');setScreenshotOverlayMoveMode(false);if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Necesitas al menos 2 puntos.';return}manualRouteActive=true;$('mapStatus').textContent='✅ Ruta manual lista. Pulsa «Generar ruta».'}
 function clearManualRoute(){manualMode=false;manualRouteActive=false;manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];$('manualMode').classList.remove('active');$('mapStatus').textContent='🧹 Todos los puntos borrados.'}
 
 const PENINSULA={
@@ -335,6 +336,11 @@ function initApp(){
   $('importScreenshotButton').onclick=()=>$('routeScreenshotFile').click();
   $('routeScreenshotFile').onchange=e=>showRouteScreenshot(e.target.files?.[0]);
   $('closeScreenshot').onclick=closeRouteScreenshot;
+  $('screenshotOpacity').oninput=e=>{if(screenshotMapOverlay)screenshotMapOverlay.setOpacity(Number(e.target.value)/100)};
+  $('screenshotScaleDown').onclick=()=>resizeScreenshotOverlay(0.90);
+  $('screenshotScaleUp').onclick=()=>resizeScreenshotOverlay(1.10);
+  $('screenshotResetOverlay').onclick=resetScreenshotOverlay;
+  $('screenshotMoveToggle').onclick=()=>setScreenshotOverlayMoveMode(!screenshotOverlayMoveMode);
   $('screenshotImportAlternatives').onclick=()=>{
     const panel=$('importRoutePanel');
     if(panel){panel.classList.remove('hidden');panel.scrollIntoView({behavior:'smooth',block:'center'});$('googleMapsLink')?.focus({preventScroll:true});}
@@ -523,20 +529,20 @@ function routeShapeIsInRegion(coords,region,geometry){
 }
 function poiQueryForStop(stop){
   if(stop==='all')return [
-    'node["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
-    'way["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]'
+    'nw["amenity"~"^(restaurant|fast_food|cafe|bar|pub|fuel)$"]',
+    'nw["tourism"="viewpoint"]'
   ];
   if(stop.includes('Restaurante'))return [
-    'node["amenity"~"^(restaurant|fast_food)$"]',
-    'way["amenity"~"^(restaurant|fast_food)$"]'
+    'nw["amenity"~"^(restaurant|fast_food)$"]'
   ];
   if(stop.includes('Café')||stop.includes('Bar'))return [
-    'node["amenity"~"^(cafe|bar|pub)$"]',
-    'way["amenity"~"^(cafe|bar|pub)$"]'
+    'nw["amenity"~"^(cafe|bar|pub)$"]'
   ];
   if(stop.includes('Gasolinera'))return [
-    'node["amenity"="fuel"]',
-    'way["amenity"="fuel"]'
+    'nw["amenity"="fuel"]'
+  ];
+  if(stop.includes('Mirador'))return [
+    'nw["tourism"="viewpoint"]'
   ];
   return [];
 }
@@ -582,44 +588,83 @@ function stopIcon(stop){
   return '📍';
 }
 async function findRealStops(coords,stop){
-  const selector=poiQueryForStop(stop);if(!selector.length)return {places:[],error:null};
+  const selector=poiQueryForStop(stop);
+  if(!selector.length)return {places:[],error:null};
   try{
-    // Buscamos en varios puntos repartidos por el recorrido, en vez de consultar
-    // un rectángulo enorme que incluye mucha zona ajena a la ruta.
-   const sampleCount=3;
+    // Consulta alrededor de una línea simplificada de la ruta: evita decenas de círculos solapados.
+    const cumulative=[0];
+    for(let i=1;i<coords.length;i++) cumulative[i]=cumulative[i-1]+distanceKm(
+      {lat:coords[i-1][0],lon:coords[i-1][1]},
+      {lat:coords[i][0],lon:coords[i][1]}
+    );
+    const totalLength=cumulative[cumulative.length-1]||0;
+    if(!totalLength)return {places:[],error:null};
     const samples=[];
-    for(let i=0;i<sampleCount;i++){
-      const p=coords[Math.round(i*(coords.length-1)/(sampleCount-1))];
-      const key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
+    const addSample=distance=>{
+      let index=0;
+      while(index<cumulative.length-1&&cumulative[index]<distance)index++;
+      const p=coords[index],key=Number(p[0]).toFixed(5)+','+Number(p[1]).toFixed(5);
       if(!samples.some(s=>s.key===key))samples.push({key,lat:Number(p[0]).toFixed(5),lon:Number(p[1]).toFixed(5)});
+    };
+    for(let d=0;d<totalLength;d+=3)addSample(d);
+    addSample(totalLength);
+    if(samples.length>64){
+      const reduced=[];
+      for(let i=0;i<64;i++)reduced.push(samples[Math.round(i*(samples.length-1)/63)]);
+      samples.splice(0,samples.length,...reduced);
     }
-    const clauses=samples.flatMap(p=>selector.map(q=>q+'(around:2000,'+p.lat+','+p.lon+');')).join('');
-    const query='[out:json][timeout:8];('+clauses+');out center tags;';
-    // Consultamos a través del Worker para evitar bloqueos CORS del navegador.
-    const endpoint='https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/overpass';
-    let data=null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
+    const lineCoordinates=samples.map(p=>p.lat+','+p.lon).join(',');
+    const clauses=selector.map(q=>q+'(around:1800,'+lineCoordinates+')').join(';');
+    const query='[out:json][timeout:20];('+clauses+';);out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),50000);
+    let elements;
     try{
-      const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+      const res=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
         let detail='';
-        try{
-          const errData=await res.json();
-          detail=errData.detail||errData.error||'';
-        }catch(_){}
+        try{const errData=await res.json();detail=errData.detail||errData.error||''}catch(_){}
         throw new Error('HTTP '+res.status+(detail?' — '+detail:''));
       }
       const json=await res.json();
       if(!Array.isArray(json.elements))throw new Error('respuesta no válida del servidor');
-      data=json;
-    }catch(error){if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 16 segundos');throw error}finally{clearTimeout(timer)}
-    if(!data)throw new Error('sin respuesta del servidor');
-    const candidates=(data.elements||[]).map(el=>{const tags=el.tags||{},category=placeCategory(tags);return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category}}).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
-    const stride=Math.max(1,Math.floor(coords.length/140));
-    const places=candidates.map(c=>{let nearest=Infinity;for(let i=0;i<coords.length;i+=stride)nearest=Math.min(nearest,distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]}));return {...c,distanceKm:nearest}}).filter(c=>c.distanceKm<=3).sort((a,b)=>a.distanceKm-b.distanceKm);
-    const unique=[];for(const p of places){if(unique.some(q=>q.name.toLowerCase()===p.name.toLowerCase()&&distanceKm(p,q)<0.08))continue;unique.push(p);if(unique.length>=80)break}
-    return {places:unique,error:null};
-  }catch(e){console.warn('No se pudieron consultar establecimientos de OpenStreetMap',e);return {places:[],error:String(e?.message||e||'error de consulta')}}
+      elements=json.elements;
+    }catch(error){
+      if(error?.name==='AbortError')throw new Error('La búsqueda de establecimientos ha superado los 50 segundos');
+      throw error;
+    }finally{clearTimeout(timer)}
+    const uniqueElements=[...new Map(elements.map(el=>[el.type+'/'+el.id,el])).values()];
+    const candidates=uniqueElements.map(el=>{
+      const tags=el.tags||{},category=placeCategory(tags);
+      return {id:el.type+'/'+el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:tags.name||tags.brand||tags.operator||category.name+' sin nombre',tags,category};
+    }).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lon));
+    const stride=Math.max(1,Math.floor(coords.length/700));
+    const places=candidates.map(c=>{
+      let nearest=Infinity,nearestIndex=0;
+      for(let i=0;i<coords.length;i+=stride){
+        const d=distanceKm({lat:c.lat,lon:c.lon},{lat:coords[i][0],lon:coords[i][1]});
+        if(d<nearest){nearest=d;nearestIndex=i;}
+      }
+      return {...c,distanceKm:nearest,routeProgress:cumulative[nearestIndex]/totalLength};
+    }).filter(c=>c.distanceKm<=2);
+    // Como máximo un establecimiento por tramo de 5 km, escogiendo el más próximo.
+    const bucketCount=Math.max(1,Math.ceil(totalLength/5));
+    const buckets=Array.from({length:bucketCount},()=>[]);
+    places.forEach(p=>buckets[Math.min(bucketCount-1,Math.floor(p.routeProgress*totalLength/5))].push(p));
+    const selected=[],seen=new Set();
+    buckets.forEach(group=>{
+      group.sort((a,b)=>a.distanceKm-b.distanceKm);
+      const place=group.find(p=>{
+        const key=p.name.toLocaleLowerCase('es');
+        if(seen.has(key))return false;
+        seen.add(key);return true;
+      });
+      if(place)selected.push(place);
+    });
+    return {places:selected,error:null};
+  }catch(error){
+    console.warn('Error buscando establecimientos:',error);
+    return {places:[],error:error?.message||'error desconocido'};
+  }
 }
 async function requestRoute(locations,plan){
   // Pedimos a Valhalla una geometría GeoJSON directamente. Así evitamos
@@ -741,7 +786,48 @@ async function generateRoute(){
 }
 $('generate').onclick=generateRoute;
 
-function render(r){$('result').classList.remove('hidden');$('result').innerHTML=`<h2>🏍️ ${r.name}</h2><small>📍 ${r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region)} · Creada por ${r.createdBy} · ${r.circular?'ruta circular':'ruta lineal'}</small><div class="stats"><div class="stat"><b>${r.km}</b><small>distancia real</small></div><div class="stat"><b>${r.duration}</b><small>tiempo estimado</small></div><div class="stat"><b>${'🔥'.repeat(r.curves)}</b><small>curvas</small></div></div><div class="stop">${r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.')))}</div><div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div><div class="actions"><button class="secondary" onclick="save()">💾 Guardar</button><button class="secondary" onclick="share()">📤 Compartir</button><button class="secondary" onclick="maps()">🗺️ Abrir mapas</button><button class="secondary" onclick="document.getElementById('generate').click()">🔄 Otra ruta</button></div>`;$('result').scrollIntoView({behavior:'smooth'})}
+
+function render(r){
+  $('result').classList.remove('hidden');
+  const sharedActions=r.sharedRouteId
+    ? '<button class="secondary" onclick="editSharedRoute()">✏️ Proponer cambios</button><button class="secondary" onclick="publishSharedRouteUpdate()">💾 Guardar cambios para todos</button><button class="secondary" onclick="showSharedRouteHistory()">🕘 Versiones anteriores</button>'
+    : '';
+  let sharePanel='';
+  if(r.sharedRouteId){
+    const links=getSharedRouteShareLinks(r);
+    sharePanel=
+      '<div class="share-panel">'+
+        '<b>📲 Compartir esta ruta</b>'+
+        '<p class="note">Elige el grupo de WhatsApp o Telegram al que quieres enviarla.</p>'+
+        '<div class="share-channels">'+
+          '<a class="secondary share-channel whatsapp-link" href="'+links.whatsappUrl+'" target="_blank" rel="noopener noreferrer">🟢 WhatsApp</a>'+
+          '<a class="secondary share-channel telegram-link" href="'+links.telegramUrl+'" target="_blank" rel="noopener noreferrer">✈️ Telegram</a>'+
+        '</div>'+
+        '<button class="secondary share-copy" type="button" onclick="copySharedRouteLink()">🔗 Copiar enlace</button>'+
+      '</div>';
+  }
+  $('result').innerHTML=
+    '<h2>🏍️ '+escapeHtml(r.name)+'</h2>'+
+    '<small>📍 '+(r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region))+
+    ' · Creada por '+escapeHtml(r.createdBy||'un motero')+
+    ' · '+(r.circular?'ruta circular':'ruta lineal')+
+    (r.sharedRouteId?' · Ruta compartida del club':'')+'</small>'+
+    '<div class="stats">'+
+      '<div class="stat"><b>'+escapeHtml(r.km||'')+'</b><small>distancia real</small></div>'+
+      '<div class="stat"><b>'+escapeHtml(r.duration||'')+'</b><small>tiempo estimado</small></div>'+
+      '<div class="stat"><b>'+'🔥'.repeat(Math.max(1,Math.min(5,Number(r.curves)||3)))+'</b><small>curvas</small></div>'+
+    '</div>'+
+    '<div class="stop">'+(r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.'))))+'</div>'+
+    '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div>'+
+    '<div class="actions">'+sharedActions+
+      '<button class="secondary" onclick="save()">💾 Guardar</button>'+
+      '<button class="secondary" onclick="share()">📤 Compartir</button>'+
+      '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
+      '<button class="secondary" onclick="document.getElementById(\'generate\').click()">🔄 Otra ruta</button>'+
+    '</div>'+
+    sharePanel;
+  $('result').scrollIntoView({behavior:'smooth'});
+}
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
@@ -761,51 +847,212 @@ function encodePolyline6(coords){
   }
   return out;
 }
+let pendingSharedRouteId=null,activeSharedRouteId=null,sharedRouteVersion=0,sharedRouteChannel=null;
+let editingSharedRoute=false;
+function routeDistanceKm(value){return Number(String(value||'0').replace(/[^0-9,.]/g,'').replace(',','.'))||0}
+function routeDurationMinutes(value){const t=String(value||'');const h=t.match(/(\d+)\s*h/),m=t.match(/(\d+)\s*min/);return Number(h?.[1]||0)*60+Number(m?.[1]||0)}
 async function share(){
   if(!current?.shape?.length){alert('Primero genera o abre una ruta.');return}
-  // Compartimos el trazado, los puntos de paso y los establecimientos encontrados.
-  // No se publica la ruta en Supabase ni se exponen otras rutas del usuario.
-  const stops=(Array.isArray(current.realStops)?current.realStops:[]).map(p=>({
-    id:p.id||'',
-    lat:Number(p.lat),
-    lon:Number(p.lon),
-    name:String(p.name||p.category?.name||'Establecimiento'),
-    distanceKm:Number(p.distanceKm||0),
-    tags:p.tags&&typeof p.tags==='object'?p.tags:{},
-    category:p.category&&typeof p.category==='object'?p.category:{name:'Establecimiento',emoji:'📍',color:'#64748b'}
-  })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
-  const routePoints=(Array.isArray(current.routePoints)?current.routePoints:[]).map(p=>({
-    name:String(p.name||'Punto de paso'),lat:Number(p.lat),lon:Number(p.lon)
-  })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
-  const params=new URLSearchParams({
-    route:encodePolyline6(current.shape),
-    name:current.name||'Ruta compartida',
-    km:current.km||'',
-    duration:current.duration||'',
-    curves:String(current.curves||3),
-    type:current.type||type,
-    region:current.region||'mallorca',
-    circular:current.circular?'1':'0',
-    stop:current.stop||'none',
-    stops:JSON.stringify(stops),
-    points:JSON.stringify(routePoints)
-  });
-  const shareUrl=new URL(window.location.href);
-  shareUrl.hash=params.toString();
-  const url=shareUrl.toString();
-  const textMessage=`🏍️ ${current.name||'Ruta compartida'}\n${current.km||''} · ${current.duration||''}\n${stops.length} establecimientos · ${routePoints.length} puntos de paso\nMallorca Riders Routes`;
-  if(navigator.share){
-    try{await navigator.share({title:current.name||'Ruta compartida',text:textMessage,url})}
-    catch(error){if(error?.name!=='AbortError')alert('No se pudo abrir el menú para compartir. Puedes copiar este enlace:\n'+url)}
-  }else if(navigator.clipboard){
-    try{await navigator.clipboard.writeText(textMessage+'\n'+url);alert('Enlace de la ruta completa copiado. Ya puedes enviarlo por WhatsApp.')}
-    catch(_){prompt('Copia este enlace para compartir la ruta completa:',url)}
-  }else{
-    prompt('Copia este enlace para compartir la ruta completa:',url);
+  if(!sbClient||!sbSession){setAuthStatus('Para crear un enlace colaborativo, inicia sesión con tu cuenta de Mallorca Riders.');alert('Inicia sesión para compartir una ruta editable con el club.');return}
+  try{
+    let id=current.sharedRouteId||null;
+    if(!id){
+      setAuthStatus('Publicando la ruta compartida para el club…');
+      const payload={
+        creator_id:sbSession.user.id,
+        title:String(current.name||'Ruta compartida').slice(0,80),
+        region:current.region||'mallorca',
+        route_type:current.type||'Mixta',
+        distance_km:routeDistanceKm(current.km),
+        duration_minutes:routeDurationMinutes(current.duration),
+        route_geojson:current,
+        stops:Array.isArray(current.realStops)?current.realStops:[],
+        notes:String(current.requestedNote||'').slice(0,500),
+        is_published:true
+      };
+      const {data,error}=await sbClient.from('shared_routes').insert(payload).select('id,version').single();
+      if(error)throw error;
+      id=data.id;
+      sharedRouteVersion=Number(data.version)||1;
+      activeSharedRouteId=id;
+      current.sharedRouteId=id;
+      current.sharedVersion=sharedRouteVersion;
+      subscribeToSharedRoute(id);
+    }
+    render(current);
+    setAuthStatus('✅ Ruta publicada. Elige WhatsApp o Telegram en el panel de compartir.');
+  }catch(error){
+    console.error('No se pudo publicar la ruta compartida',error);
+    setAuthStatus('No se pudo crear el enlace colaborativo: '+(error.message||'error'));
+    alert('No se pudo publicar la ruta. Comprueba que la actualización de colaboración esté aplicada en Supabase.\n'+(error.message||''));
   }
 }
-function loadSharedRoute(){
+
+function getSharedRouteShareLinks(route=current){
+  if(!route?.sharedRouteId)return null;
+  const shareUrl=new URL(window.location.href);
+  shareUrl.hash=new URLSearchParams({shared:route.sharedRouteId}).toString();
+  const url=shareUrl.toString();
+  const details=[route.km||'',route.duration||''].filter(Boolean).join(' · ');
+  const message='🏍️ '+(route.name||'Ruta compartida')+(details?'\n'+details:'')+'\nRuta colaborativa de Mallorca Riders. Los miembros pueden abrirla y proponer cambios.';
+  return {
+    url,
+    whatsappUrl:'https://wa.me/?text='+encodeURIComponent(message+'\n'+url),
+    telegramUrl:'https://t.me/share/url?url='+encodeURIComponent(url)+'&text='+encodeURIComponent(message),
+    copyText:message+'\n'+url
+  };
+}
+async function copySharedRouteLink(){
+  const links=getSharedRouteShareLinks();
+  if(!links){alert('Primero publica la ruta para obtener el enlace.');return}
+  try{
+    if(!navigator.clipboard?.writeText)throw new Error('El portapapeles no está disponible.');
+    await navigator.clipboard.writeText(links.copyText);
+    setAuthStatus('✅ Enlace copiado. Ya puedes pegarlo en WhatsApp o Telegram.');
+  }catch(error){
+    prompt('Copia este mensaje y enlace para compartir la ruta:',links.copyText);
+  }
+}
+
+function drawSharedRoute(route){
+  if(!map||!Array.isArray(route?.shape)||route.shape.length<2)return;
+  clearRoute();
+  routeLine=L.polyline(route.shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(route.shape);
+  (route.routePoints||[]).forEach((p,i)=>{
+    const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
+    routeMarkers.push(marker);
+  });
+  (route.realStops||[]).forEach(place=>{
+    const cat=place.category||{name:'Establecimiento',emoji:'📍',color:'#64748b'};
+    const popup='<b>'+escapeHtml(place.name||'Establecimiento')+'</b><br>'+escapeHtml(cat.emoji||'📍')+' '+escapeHtml(cat.name||'Establecimiento')+'<br>A '+Number(place.distanceKm||0).toFixed(1)+' km de la ruta';
+    const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
+    marker.bindTooltip((cat.emoji||'📍')+' '+escapeHtml(place.name||'Establecimiento'),{sticky:true,direction:'top',opacity:0.96});
+    routeMarkers.push(marker);
+  });
+  const bounds=routeLine.getBounds();
+  [...(route.routePoints||[]).map(p=>[p.lat,p.lon]),...(route.realStops||[]).map(p=>[p.lat,p.lon])].forEach(p=>bounds.extend(p));
+  map.fitBounds(bounds,{padding:[30,30]});
+}
+function subscribeToSharedRoute(id){
+  if(!sbClient||!id)return;
+  if(sharedRouteChannel){sbClient.removeChannel(sharedRouteChannel);sharedRouteChannel=null}
+  sharedRouteChannel=sbClient.channel('shared-route-'+id)
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'shared_routes',filter:'id=eq.'+id},payload=>{
+      const row=payload.new;
+      if(!row||Number(row.version)<=sharedRouteVersion)return;
+      if(manualMode||manualRouteActive){
+        $('mapStatus').textContent='🔔 Otro miembro ha actualizado esta ruta. Tus cambios siguen en el mapa; recarga la ruta antes de guardar para evitar sobrescribir.';
+        return;
+      }
+      applySharedRouteRow(row);
+      $('mapStatus').textContent='🔄 Un compañero ha actualizado la ruta. Ya estás viendo la última versión.';
+    }).subscribe();
+}
+function applySharedRouteRow(row){
+  const data=row?.route_geojson;
+  if(!data||!Array.isArray(data.shape))throw new Error('La ruta compartida no contiene un trazado válido.');
+  activeSharedRouteId=row.id;sharedRouteVersion=Number(row.version)||1;
+  current={...data,sharedRouteId:row.id,sharedVersion:sharedRouteVersion,realStops:Array.isArray(data.realStops)?data.realStops:(Array.isArray(row.stops)?row.stops:[]),createdBy:data.createdBy||'un miembro del club'};
+  current.realStop=current.realStops[0]||null;
+  drawSharedRoute(current);render(current);
+}
+async function openSharedRoute(id){
+  pendingSharedRouteId=id;
+  if(!sbClient||!sbSession){setAuthStatus('Inicia sesión para abrir la ruta compartida del club. Después aparecerá automáticamente.');return}
+  try{
+    setAuthStatus('Abriendo la ruta compartida…');
+    const {data,error}=await sbClient.from('shared_routes').select('id,title,region,route_type,distance_km,duration_minutes,route_geojson,stops,version,creator_id,updated_at').eq('id',id).single();
+    if(error)throw error;
+    if(!data?.route_geojson)throw new Error('La ruta compartida está vacía.');
+    applySharedRouteRow(data);subscribeToSharedRoute(id);
+    const {data:profile}=await sbClient.from('profiles').select('nickname').eq('id',data.creator_id).maybeSingle();
+    if(profile?.nickname){current.createdBy=profile.nickname;render(current)}
+    $('mapStatus').textContent='🏍️ Ruta compartida abierta · versión '+sharedRouteVersion+'. Puedes proponer cambios y guardarlos para todos.';
+    setAuthStatus('✅ Ruta del club cargada. Los cambios nuevos aparecerán automáticamente.');
+    pendingSharedRouteId=null;
+  }catch(error){
+    console.error('No se pudo abrir la ruta colaborativa',error);
+    setAuthStatus('No se pudo abrir la ruta compartida: '+(error.message||'error'));
+    $('mapStatus').textContent='⚠️ No se pudo cargar la ruta del club. Comprueba que la migración colaborativa esté aplicada en Supabase.';
+  }
+}
+function editSharedRoute(){
+  editingSharedRoute=true;
+  if(!current?.sharedRouteId||!current.shape?.length){alert('Abre primero una ruta compartida.');return}
+  $('region').value=current.region||'mallorca';updateRegionUI();
+  type=current.type||'Mixta';
+  document.querySelectorAll('#types .chip').forEach(chip=>chip.classList.toggle('active',chip.dataset.v===type));
+  $('curves').value=String(current.curves||3);
+  $('circle').checked=!!current.circular;
+  if(current.stop)$('stop').value=current.stop;
+  const km=routeDistanceKm(current.km),kmOptions=[80,120,160,200,250];
+  $('km').value=kmOptions.reduce((best,v)=>Math.abs(v-km)<Math.abs(best-km)?v:best,120)+' km';
+  const minutes=routeDurationMinutes(current.duration),hourOptions=[1,2,3,5,8];
+  $('duration').value=hourOptions.reduce((best,v)=>Math.abs(v*60-minutes)<Math.abs(best*60-minutes)?v:best,3)+' h';
+  manualWaypoints=[];manualMarkers.forEach(m=>map&&map.removeLayer(m));manualMarkers=[];
+  let points=[{lat:current.shape[0][0],lon:current.shape[0][1],name:'Salida'},...(current.routePoints||[])];
+  if(points.length<2){
+    const n=current.shape.length;
+    points=[0.0,0.33,0.66,1].map((f,i)=>{const p=current.shape[Math.min(n-1,Math.round((n-1)*f))];return {lat:p[0],lon:p[1],name:i===0?'Salida':'Punto '+i}});
+  }
+  points.forEach(p=>addManualWaypoint({lat:Number(p.lat),lng:Number(p.lon)}));
+  manualMode=true;manualRouteActive=false;$('manualMode').classList.add('active');
+  $('mapStatus').textContent='✏️ Edita los puntos de la ruta compartida: arrástralos, borra alguno o toca el mapa para añadir. Después pulsa «Terminar puntos» y «Generar ruta».';
+  $('map').scrollIntoView({behavior:'smooth',block:'center'});
+}
+async function publishSharedRouteUpdate(){
+  if(!current?.sharedRouteId||!sbClient||!sbSession){alert('Inicia sesión y abre una ruta compartida para guardar cambios.');return}
+  if(!current.shape?.length||current.shape.length<2){alert('Primero genera la nueva ruta antes de guardarla.');return}
+  try{
+    setAuthStatus('Guardando la nueva versión para todos los miembros…');
+    const {data,error}=await sbClient.rpc('update_shared_route',{
+      p_route_id:current.sharedRouteId,
+      p_expected_version:sharedRouteVersion,
+      p_route_data:current
+    });
+    if(error)throw error;
+    const result=Array.isArray(data)?data[0]:data;
+    sharedRouteVersion=Number(result?.new_version)||sharedRouteVersion+1;
+    current.sharedVersion=sharedRouteVersion;current.sharedRouteId=activeSharedRouteId;
+    setAuthStatus('✅ Cambios guardados. Todos los miembros verán la versión '+sharedRouteVersion+'.');
+    $('mapStatus').textContent='✅ Ruta actualizada para todo el club · versión '+sharedRouteVersion+'.';
+    render(current);
+  }catch(error){
+    console.error('No se pudo actualizar la ruta compartida',error);
+    const message=String(error.message||error);
+    if(message.includes('VERSION_CONFLICT')){
+      alert('Otro miembro ha guardado una versión más reciente. Voy a cargarla para que no se pierdan sus cambios.');
+      await openSharedRoute(current.sharedRouteId);
+    }else{
+      alert('No se pudieron guardar los cambios para todos. '+message);
+      setAuthStatus('Error al sincronizar la ruta: '+message);
+    }
+  }
+}
+async function showSharedRouteHistory(){
+  if(!activeSharedRouteId||!sbClient||!sbSession){alert('No hay una ruta compartida abierta.');return}
+  const {data,error}=await sbClient.from('shared_route_versions').select('version,route_data,created_at').eq('route_id',activeSharedRouteId).order('version',{ascending:false}).limit(10);
+  if(error){alert('No se pudo cargar el historial: '+error.message);return}
+  if(!data?.length){alert('Todavía no hay versiones anteriores. Se guardará la primera cuando alguien modifique la ruta.');return}
+  const choice=prompt('Versiones anteriores (escribe el número para cargarla):\\n'+data.map((v,i)=>(i+1)+'. Versión '+v.version+' · '+new Date(v.created_at).toLocaleString('es-ES')).join('\\n'));
+  if(choice===null)return;
+  const selected=data[Number(choice)-1];
+  if(!selected){alert('Número de versión no válido.');return}
+  const latestVersion=sharedRouteVersion;
+  current={...selected.route_data,sharedRouteId:activeSharedRouteId,sharedVersion:latestVersion};
+  drawSharedRoute(current);render(current);
+  $('mapStatus').textContent='🕘 Versión anterior '+selected.version+' cargada. Para restaurarla para todos, pulsa «Guardar cambios para todos».';
+}
+async function loadSharedRoute(){
   const params=new URLSearchParams(window.location.hash.slice(1));
+  const sharedId=params.get('shared');
+  if(sharedId){
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sharedId)){alert('El enlace de ruta compartida no es válido.');return}
+    pendingSharedRouteId=sharedId;
+    if(sbClient&&sbSession)await openSharedRoute(sharedId);
+    else setAuthStatus('Inicia sesión para abrir la ruta compartida del club. Después aparecerá automáticamente.');
+    return;
+  }
   const encoded=params.get('route');
   if(!encoded)return;
   try{
@@ -837,24 +1084,9 @@ function loadSharedRoute(){
       requestedKm:0,requestedDuration:0,
       requestedNote:'Ruta compartida por un motero'
     };
-    clearRoute();
-    routeLine=L.polyline(shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(shape);
-    routePoints.forEach((p,i)=>{
-      const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
-      routeMarkers.push(marker);
-    });
-    sharedStops.forEach(place=>{
-      const cat=place.category||{name:'Establecimiento',emoji:'📍',color:'#64748b'};
-      const popup='<b>'+escapeHtml(place.name)+'</b><br>'+escapeHtml(cat.emoji||'📍')+' '+escapeHtml(cat.name||'Establecimiento')+'<br>A '+Number(place.distanceKm||0).toFixed(1)+' km de la ruta';
-      const marker=L.marker([place.lat,place.lon],{icon:poiMarkerIcon(cat)}).addTo(map).bindPopup(popup);
-      marker.bindTooltip((cat.emoji||'📍')+' '+escapeHtml(place.name),{sticky:true,direction:'top',opacity:0.96});
-      routeMarkers.push(marker);
-    });
-    const bounds=routeLine.getBounds();
-    [...routePoints.map(p=>[p.lat,p.lon]),...sharedStops.map(p=>[p.lat,p.lon])].forEach(p=>bounds.extend(p));
-    map.fitBounds(bounds,{padding:[30,30]});
+    drawSharedRoute(current);
     render(current);
-    $('mapStatus').textContent='🏍️ Ruta completa compartida: trazado, '+routePoints.length+' puntos de paso y '+sharedStops.length+' establecimientos. Puedes guardarla o volver a compartirla.';
+    $('mapStatus').textContent='🏍️ Ruta importada desde un enlace anterior. Para sincronizar cambios, vuelve a compartirla con tu cuenta.';
   }catch(error){
     console.error('No se pudo abrir la ruta compartida',error);
     alert('No se ha podido abrir esta ruta compartida. Pide que te envíen un enlace nuevo.');
@@ -884,87 +1116,204 @@ function maps(){
   $('mapStatus').textContent='🗺️ Abriendo Google Maps con origen, destino y hasta 3 puntos intermedios. Google puede recalcular algunos tramos.';
 }
 let screenshotObjectUrl=null,screenshotReferenceActive=false;
+let screenshotMapOverlay=null,screenshotOverlayMoveMode=false,screenshotOverlayDragCleanup=null;
+let screenshotRemoveControl=null,screenshotRemoveButton=null;
+function updateScreenshotRemoveControl(visible){if(screenshotRemoveButton)screenshotRemoveButton.hidden=!visible}
+function ensureScreenshotRemoveControl(){
+  if(!map||screenshotRemoveControl)return;
+  const RemoveControl=L.Control.extend({onAdd:function(){
+    const button=L.DomUtil.create('button','screenshot-remove-map-button');
+    button.type='button';
+    button.textContent='✕ Quitar captura';
+    button.setAttribute('aria-label','Quitar la captura sin borrar los puntos marcados');
+    button.title='Quitar la captura; los puntos marcados se conservan';
+    button.style.cssText='background:#1683ff;color:#fff;border:2px solid #fff;border-radius:9px;padding:9px 11px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.45);cursor:pointer';
+    button.hidden=true;
+    L.DomEvent.disableClickPropagation(button);
+    L.DomEvent.disableScrollPropagation(button);
+    button.addEventListener('click',closeRouteScreenshot);
+    screenshotRemoveButton=button;
+    return button;
+  }});
+  screenshotRemoveControl=new RemoveControl({position:'topright'}).addTo(map);
+}
+
+function screenshotOverlayBounds(aspectRatio,fit=0.88){
+  if(!map)throw new Error('El mapa no está disponible.');
+  const size=map.getSize();
+  const maxWidth=size.x*fit,maxHeight=size.y*fit;
+  let width=maxWidth,height=width/aspectRatio;
+  if(height>maxHeight){height=maxHeight;width=height*aspectRatio}
+  const center=map.getCenter();
+  const pixel=map.latLngToLayerPoint(center);
+  const northWest=map.layerPointToLatLng(L.point(pixel.x-width/2,pixel.y-height/2));
+  const southEast=map.layerPointToLatLng(L.point(pixel.x+width/2,pixel.y+height/2));
+  return L.latLngBounds(southEast,northWest);
+}
+function setScreenshotOverlayMoveMode(enabled){
+  screenshotOverlayMoveMode=!!enabled&&!!screenshotMapOverlay;
+  const image=screenshotMapOverlay?.getElement();
+  if(image){
+    image.style.pointerEvents=screenshotOverlayMoveMode?'auto':'none';
+    image.style.cursor=screenshotOverlayMoveMode?'move':'default';
+    image.style.touchAction='none';
+    image.style.userSelect='none';
+    image.draggable=false;
+  }
+  const button=$('screenshotMoveToggle');
+  if(button)button.textContent=screenshotOverlayMoveMode
+    ?'🔒 Fijar captura y mover mapa'
+    :'↔ Mover captura';
+}
+function bindScreenshotOverlayDrag(overlay){
+  const image=overlay?.getElement();
+  if(!image||!map)return;
+  let drag=null;
+  const onMove=event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    const point=map.mouseEventToLatLng(event);
+    const dLat=point.lat-drag.start.lat,dLng=point.lng-drag.start.lng;
+    const b=drag.bounds;
+    overlay.setBounds([
+      [b.getSouth()+dLat,b.getWest()+dLng],
+      [b.getNorth()+dLat,b.getEast()+dLng]
+    ]);
+    event.preventDefault();
+  };
+  const onEnd=event=>{
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    const state=drag;drag=null;
+    window.removeEventListener('pointermove',onMove);
+    window.removeEventListener('pointerup',onEnd);
+    window.removeEventListener('pointercancel',onEnd);
+    try{if(image.hasPointerCapture(event.pointerId))image.releasePointerCapture(event.pointerId)}catch(_){}
+    if(state.mapWasDraggable&&map&&!map.dragging.enabled())map.dragging.enable();
+    event.preventDefault();
+  };
+  const onStart=event=>{
+    if(!screenshotOverlayMoveMode||!map)return;
+    if(event.pointerType==='mouse'&&event.button!==0)return;
+    const mapWasDraggable=map.dragging.enabled();
+    drag={
+      pointerId:event.pointerId,
+      start:map.mouseEventToLatLng(event),
+      bounds:overlay.getBounds(),
+      mapWasDraggable
+    };
+    if(mapWasDraggable)map.dragging.disable();
+    try{image.setPointerCapture(event.pointerId)}catch(_){}
+    window.addEventListener('pointermove',onMove,{passive:false});
+    window.addEventListener('pointerup',onEnd,{passive:false});
+    window.addEventListener('pointercancel',onEnd,{passive:false});
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+  };
+  image.addEventListener('pointerdown',onStart);
+  screenshotOverlayDragCleanup=()=>{
+    image.removeEventListener('pointerdown',onStart);
+    window.removeEventListener('pointermove',onMove);
+    window.removeEventListener('pointerup',onEnd);
+    window.removeEventListener('pointercancel',onEnd);
+    if(drag?.mapWasDraggable&&map&&!map.dragging.enabled())map.dragging.enable();
+    drag=null;
+  };
+  image.style.touchAction='none';
+  setScreenshotOverlayMoveMode(true);
+}
+function resizeScreenshotOverlay(factor){
+  if(!screenshotMapOverlay||!map)return;
+  const bounds=screenshotMapOverlay.getBounds();
+  const center=bounds.getCenter();
+  const northWest=map.latLngToLayerPoint(bounds.getNorthWest());
+  const southEast=map.latLngToLayerPoint(bounds.getSouthEast());
+  const width=(southEast.x-northWest.x)*factor;
+  const height=(southEast.y-northWest.y)*factor;
+  const centerPoint=map.latLngToLayerPoint(center);
+  const newNorthWest=map.layerPointToLatLng(L.point(centerPoint.x-width/2,centerPoint.y-height/2));
+  const newSouthEast=map.layerPointToLatLng(L.point(centerPoint.x+width/2,centerPoint.y+height/2));
+  screenshotMapOverlay.setBounds(L.latLngBounds(newSouthEast,newNorthWest));
+}
+function resetScreenshotOverlay(){
+  if(!screenshotMapOverlay||!map)return;
+  const image=screenshotMapOverlay.getElement();
+  const aspect=Number(image?.naturalWidth||1)/Number(image?.naturalHeight||1);
+  screenshotMapOverlay.setBounds(screenshotOverlayBounds(aspect,0.88));
+  setScreenshotOverlayMoveMode(true);
+}
+function removeScreenshotOverlay(){
+  if(screenshotOverlayDragCleanup){screenshotOverlayDragCleanup();screenshotOverlayDragCleanup=null}
+  if(screenshotMapOverlay&&map)map.removeLayer(screenshotMapOverlay);
+  screenshotMapOverlay=null;
+  screenshotOverlayMoveMode=false;
+  updateScreenshotRemoveControl(false);
+}
+
 async function showRouteScreenshot(file){
   if(!file)return;
   if(!file.type.startsWith('image/')){alert('Selecciona una imagen JPG, PNG o WEBP.');return}
-  // Desde que se elige una captura, bloquear la generación normal hasta cerrar
-  // el panel o elegir puntos geográficos reales; incluso si falla la detección.
   if(screenshotObjectUrl)URL.revokeObjectURL(screenshotObjectUrl);
   screenshotObjectUrl=URL.createObjectURL(file);
-  $('routeScreenshotPreview').src=screenshotObjectUrl;
+  const img=$('routeScreenshotPreview');
+  img.hidden=true;
+  img.src=screenshotObjectUrl;
   $('routeScreenshotName').textContent=file.name;
   $('routeScreenshotPanel').classList.remove('hidden');
-  const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas'),img=$('routeScreenshotPreview');
-  canvas.classList.add('hidden');canvas.style.display='none';
-  status.textContent='Analizando los colores de la captura en este dispositivo…';
-  $('mapStatus').textContent='📸 Analizando la captura localmente; no se sube a ningún servidor.';
+  const status=$('routeTraceStatus'),canvas=$('routeTraceCanvas');
+  canvas.classList.add('hidden');
+  canvas.style.display='none';
+  status.textContent='Abriendo la captura para colocarla sobre el mapa…';
+  $('mapStatus').textContent='📸 Preparando la captura como plantilla sobre el mapa.';
   try{
-    await new Promise((resolve,reject)=>{if(img.complete&&img.naturalWidth)resolve();else{img.onload=resolve;img.onerror=()=>reject(new Error('No se pudo abrir la imagen.'))}});
-    const maxSide=1100,scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
-    const w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));
-    canvas.width=w;canvas.height=h;
-    const ctx=canvas.getContext('2d',{willReadFrequently:true});
-    ctx.drawImage(img,0,0,w,h);
-    const frame=ctx.getImageData(0,0,w,h),d=frame.data;
-    const totalPixels=w*h,blue=new Uint8Array(totalPixels),visited=new Uint8Array(totalPixels);
-    // Primero aislamos píxeles azulados y después buscamos grupos conectados.
-    // Así evitamos resaltar todos los iconos azules dispersos del mapa.
-    let blueHits=0;
-    for(let p=0;p<totalPixels;p++){
-      const i=p*4,r=d[i],g=d[i+1],b=d[i+2];
-      if(b>115&&b>r*1.28&&b>g*1.06&&g>55&&r<115&&d[i+3]>100){blue[p]=1;blueHits++}
-    }
-    const stack=new Int32Array(totalPixels);
-    let components=[],largest=0;
-    for(let p=0;p<totalPixels;p++){
-      if(!blue[p]||visited[p])continue;
-      let top=0;stack[top++]=p;visited[p]=1;
-      const pixels=[];let minX=w,minY=h,maxX=0,maxY=0;
-      while(top){
-        const q=stack[--top],x=q%w,y=(q/w)|0;
-        pixels.push(q);if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;
-        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-          if(!dx&&!dy)continue;
-          const nx=x+dx,ny=y+dy;if(nx<0||nx>=w||ny<0||ny>=h)continue;
-          const n=ny*w+nx;if(blue[n]&&!visited[n]){visited[n]=1;stack[top++]=n}
-        }
+    await new Promise((resolve,reject)=>{
+      if(img.complete&&img.naturalWidth)resolve();
+      else{
+        img.onload=resolve;
+        img.onerror=()=>reject(new Error('No se pudo abrir la imagen.'));
       }
-      if(pixels.length>largest)largest=pixels.length;
-      components.push({pixels,size:pixels.length,minX,minY,maxX,maxY});
-    }
-    if(blueHits<Math.max(45,totalPixels*0.00008)||!components.length){
-      status.textContent='No he podido detectar un trazado azul suficientemente claro. No se ha creado ninguna ruta.';
-      $('mapStatus').textContent='⚠️ No se ha detectado una línea azul fiable.';
-      return;
-    }
-    // Conservamos el componente principal y solo segmentos grandes relacionados
-    // por tamaño; los iconos aislados y pequeños quedan fuera.
-    const keep=components.filter(c=>c.size>=Math.max(8,largest*0.10)).sort((a,b)=>b.size-a.size).slice(0,18);
-    const selected=new Uint8Array(totalPixels);let hits=0,minX=w,minY=h,maxX=0,maxY=0;
-    for(const c of keep)for(const q of c.pixels){selected[q]=1;hits++;const x=q%w,y=(q/w)|0;if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y}
-    if(!hits){status.textContent='No he podido separar la línea principal del mapa.';return}
-    const mask=ctx.createImageData(w,h),md=mask.data;
-    for(let p=0;p<totalPixels;p++)if(selected[p]){const i=p*4;md[i]=255;md[i+1]=30;md[i+2]=190;md[i+3]=220}
-    canvas.style.backgroundImage='url("'+screenshotObjectUrl+'")';
-    canvas.style.backgroundSize='100% 100%';
-    canvas.style.backgroundRepeat='no-repeat';
-    canvas.style.backgroundColor='transparent';
-    ctx.clearRect(0,0,w,h);
-    ctx.putImageData(mask,0,0);
-    canvas.classList.remove('hidden');canvas.style.display='block';
+    });
+    if(!initMap())throw new Error('El mapa no está disponible para superponer la captura.');
+    ensureScreenshotRemoveControl();
+    map.invalidateSize({pan:false});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    removeScreenshotOverlay();
+    const aspect=img.naturalWidth/Math.max(1,img.naturalHeight);
+    const bounds=screenshotOverlayBounds(aspect,0.88);
+    screenshotMapOverlay=L.imageOverlay(screenshotObjectUrl,bounds,{
+      opacity:0.55,
+      interactive:true,
+      zIndex:450
+    }).addTo(map);
     screenshotReferenceActive=true;
-    status.textContent='He aislado '+hits.toLocaleString('es-ES')+' píxeles conectados del posible trazado azul y los he resaltado en magenta. Esto aún no identifica su ubicación GPS.';
-    $('mapStatus').textContent='🧭 Captura analizada. Para evitar una ruta en otra zona, no se usará esta imagen como si contuviera coordenadas GPS. Importa un enlace/GPX o coloca puntos sobre el mapa.';
+    if($('screenshotOpacity'))$('screenshotOpacity').value='55';
+    bindScreenshotOverlayDrag(screenshotMapOverlay);
+    updateScreenshotRemoveControl(true);
+    status.textContent='✅ Captura colocada sin deformar. Arrástrala encima del mapa para alinear carreteras; ajusta transparencia y tamaño.';
+    $('mapStatus').textContent='🗺️ Arrastra la captura desde su interior. Cuando encaje, pulsa «Marcar puntos sobre el mapa».';
   }catch(err){
-    status.textContent='No se pudo analizar la imagen: '+(err.message||'error desconocido');
-    $('mapStatus').textContent='⚠️ No se pudo analizar la captura.';
+    screenshotReferenceActive=false;
+    updateScreenshotRemoveControl(false);
+    status.textContent='No se pudo colocar la captura: '+(err.message||'error desconocido');
+    $('mapStatus').textContent='⚠️ No se pudo superponer la captura al mapa.';
   }
 }
+
 function closeRouteScreenshot(){
+  const hadCapture=!!screenshotMapOverlay||!!screenshotObjectUrl;
   screenshotReferenceActive=false;
+  removeScreenshotOverlay();
   $('routeScreenshotPanel').classList.add('hidden');
   $('routeScreenshotFile').value='';
   if(screenshotObjectUrl){URL.revokeObjectURL(screenshotObjectUrl);screenshotObjectUrl=null}
+  if(hadCapture){
+    const count=manualWaypoints.length;
+    $('mapStatus').textContent=count
+      ?'✅ Captura retirada. Se conservan los '+count+' puntos que has marcado. Pulsa «Generar ruta» cuando estés listo.'
+      :'✅ Captura retirada del mapa.';
+    if($('routeTraceStatus'))$('routeTraceStatus').textContent=count
+      ?'Captura retirada; tus '+count+' puntos manuales siguen en el mapa.'
+      :'Captura retirada del mapa.';
+  }
 }
 async function loadGoogleMapsLink(){
   const raw=$('googleMapsLink').value.trim();
@@ -1072,6 +1421,8 @@ function setAuthStatus(message){const el=$('authStatus');if(el)el.textContent=me
 function setAuthUI(session){
   sbSession=session||null;
   const signedIn=!!sbSession;
+  if(!signedIn&&sharedRouteChannel&&sbClient){sbClient.removeChannel(sharedRouteChannel);sharedRouteChannel=null}
+  if(signedIn&&pendingSharedRouteId){openSharedRoute(pendingSharedRouteId)}
   $('authSignedIn').classList.toggle('hidden',!signedIn);
   $('authEmail').classList.toggle('hidden',signedIn);
   $('authPassword').classList.toggle('hidden',signedIn);

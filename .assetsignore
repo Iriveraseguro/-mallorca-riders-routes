@@ -1,0 +1,9 @@
+# Do not publish build dependencies or deployment internals as public assets
+node_modules/
+.wrangler/
+.github/
+.git/
+worker.js
+wrangler.jsonc
+package.json
+package-lock.json

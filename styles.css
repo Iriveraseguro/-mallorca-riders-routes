@@ -13,3 +13,29 @@
 
 /* Flechas azules que indican el sentido de circulación en cada ruta. */
 .route-direction-icon{background:transparent!important;border:0!important;pointer-events:none!important}.route-direction-arrow{display:block;width:24px;height:24px;color:#1683ff;font-size:24px;line-height:24px;font-weight:900;text-align:center;text-shadow:-1px -1px 2px #fff,1px 1px 2px #fff,0 0 5px #fff;transform-origin:50% 50%;}
+
+
+/* Botones directos para compartir rutas por WhatsApp y Telegram. */
+.share-panel{margin-top:14px;padding:14px;border:1px solid #3b3b40;border-radius:12px;background:#1c1c1f}
+.share-panel>b{display:block;margin-bottom:6px}
+.share-panel .note{line-height:1.5;margin:6px 0 10px}
+.share-channels{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.share-channel{display:flex;align-items:center;justify-content:center;min-height:44px;text-align:center;text-decoration:none}
+.share-channel.whatsapp-link{background:#176b3a}
+.share-channel.telegram-link{background:#1769aa}
+.share-copy{width:100%;cursor:pointer}
+
+
+/* Controles de la captura georreferenciada sobre el mapa. */
+.screenshot-overlay-controls{margin:10px 0 12px;padding:12px;background:#202023;border:1px solid #3b3b40;border-radius:12px}
+.screenshot-overlay-controls label{display:block;font-size:13px;font-weight:700;margin-bottom:8px}
+.screenshot-overlay-controls input[type="range"]{display:block;width:100%;accent-color:#1683ff;margin:4px 0 12px}
+.screenshot-overlay-buttons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:8px 0}
+.screenshot-overlay-buttons .map-button{white-space:normal;padding:10px 6px}
+#screenshotMoveToggle{width:100%;white-space:normal;margin-top:4px}
+#routeScreenshotPreview[hidden]{display:none!important}
+.leaflet-image-layer.leaflet-interactive{touch-action:none}
+@media(max-width:480px){
+  .screenshot-overlay-buttons{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .screenshot-overlay-buttons .map-button{font-size:12px}
+}
