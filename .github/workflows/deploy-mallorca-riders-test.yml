@@ -27,10 +27,48 @@ jobs:
           node --check app.js
           node --check worker.js
 
-      - name: Deploy only to the test Worker
+      - name: Deploy test Worker (attempt 1)
+        id: deploy1
+        continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 4887e83dc0665be474369d9c3a64ff69
           wranglerVersion: "4.157.0"
           command: deploy --config wrangler.jsonc --name mallorca-riders-proxy-test
+
+      - name: Wait before Cloudflare retry
+        if: steps.deploy1.outcome == 'failure'
+        run: sleep 12
+
+      - name: Deploy test Worker (attempt 2)
+        id: deploy2
+        if: steps.deploy1.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: 4887e83dc0665be474369d9c3a64ff69
+          wranglerVersion: "4.157.0"
+          command: deploy --config wrangler.jsonc --name mallorca-riders-proxy-test
+
+      - name: Wait before final Cloudflare retry
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+        run: sleep 20
+
+      - name: Deploy test Worker (attempt 3)
+        id: deploy3
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: 4887e83dc0665be474369d9c3a64ff69
+          wranglerVersion: "4.157.0"
+          command: deploy --config wrangler.jsonc --name mallorca-riders-proxy-test
+
+      - name: Mark deployment failed after all retries
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure' && steps.deploy3.outcome == 'failure'
+        run: |
+          echo "All test Worker deployment attempts failed."
+          exit 1
