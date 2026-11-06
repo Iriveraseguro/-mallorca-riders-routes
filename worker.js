@@ -1,6 +1,10 @@
 const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","google.com","maps.google.com"]);
 const DGT_RESOURCE_ID = "1d36ea74-593d-4e45-acfa-fb8db5a460bc";
-const DGT_DOWNLOAD_URL = "https://nap.dgt.es/es/dataset/incidencias-dgt-datex2-v3-7/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml";
+const DGT_DOWNLOAD_URLS = [
+  "https://nap.dgt.es/dataset/77be854a-6911-47dc-ba4c-b13067a50552/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml",
+  "https://nap.dgt.es/es/dataset/incidencias-dgt-datex2-v3-7/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml",
+  "https://nap.dgt.es/dataset/incidencias-dgt-datex2-v3-7/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml"
+];
 let cachedDgtFeed = null;
 let cachedDgtFeedAt = 0;
 export default {
@@ -87,7 +91,7 @@ export default {
       } catch (error) {
         console.warn("No se pudo resolver el recurso DATEX II del NAP:",String(error?.message||error));
       }
-      sources.push(DGT_DOWNLOAD_URL);
+      sources.push(...DGT_DOWNLOAD_URLS);
       const failures = [];
       for (const source of [...new Set(sources)]) {
         const controller = new AbortController();
@@ -103,8 +107,13 @@ export default {
           });
           if (!upstream.ok) throw new Error("NAP respondió HTTP "+upstream.status);
           const xml = await upstream.text();
-          if (!xml || xml.length > 6000000 || !/<\s*(?:[\w.-]+:)?(?:d2LogicalModel|situationPublication|SituationPublication)\b/i.test(xml)) {
-            throw new Error("El recurso del NAP no devolvió un XML DATEX II válido.");
+          const xmlLooksLikeDatex = /<\s*(?:[\w.-]+:)?(?:d2LogicalModel|situationPublication|SituationPublication|DATEX2)\b/i.test(xml)
+            || /<\s*(?:[\w.-]+:)?situationRecord\b/i.test(xml);
+          if (!xml || xml.length > 6000000 || !xmlLooksLikeDatex) {
+            const contentType = upstream.headers.get("Content-Type") || "desconocido";
+            const preview = String(xml || "").slice(0,220).replace(/\s+/g," ").trim();
+            const finalPath = (()=>{try{return new URL(upstream.url).pathname}catch(_){return "URL desconocida"}})();
+            throw new Error("Formato NAP no reconocido (tipo="+contentType+", ruta="+finalPath+", inicio="+preview+").");
           }
           cachedDgtFeed = xml;
           cachedDgtFeedAt = Date.now();
