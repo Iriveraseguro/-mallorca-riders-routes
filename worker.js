@@ -107,13 +107,16 @@ export default {
           });
           if (!upstream.ok) throw new Error("NAP respondió HTTP "+upstream.status);
           const xml = await upstream.text();
-          const xmlLooksLikeDatex = /<\s*(?:[\w.-]+:)?(?:d2LogicalModel|situationPublication|SituationPublication|DATEX2)\b/i.test(xml)
-            || /<\s*(?:[\w.-]+:)?situationRecord\b/i.test(xml);
-          if (!xml || xml.length > 6000000 || !xmlLooksLikeDatex) {
-            const contentType = upstream.headers.get("Content-Type") || "desconocido";
-            const preview = String(xml || "").slice(0,220).replace(/\s+/g," ").trim();
+          const contentType = upstream.headers.get("Content-Type") || "desconocido";
+          const trimmedXml = String(xml || "").replace(/^\\uFEFF/,"").trimStart();
+          const hasTrafficPublication = /situation|roadworks?|traffic|datex|d2logicalmodel/i.test(xml || "");
+          const xmlLooksValid = /^<\\?xml\\b/i.test(trimmedXml)
+            && !/<html[\\s>]/i.test(trimmedXml)
+            && /<[^!?][^>]*>/i.test(trimmedXml);
+          if (!xml || xml.length > 6000000 || !contentType.toLowerCase().includes("xml") || !xmlLooksValid || !hasTrafficPublication) {
+            const preview = String(xml || "").slice(0,900).replace(/\\s+/g," ").trim();
             const finalPath = (()=>{try{return new URL(upstream.url).pathname}catch(_){return "URL desconocida"}})();
-            throw new Error("Formato NAP no reconocido (tipo="+contentType+", ruta="+finalPath+", inicio="+preview+").");
+            throw new Error("DATEX II no válido (tipo="+contentType+", ruta="+finalPath+", inicio="+preview+").");
           }
           cachedDgtFeed = xml;
           cachedDgtFeedAt = Date.now();
