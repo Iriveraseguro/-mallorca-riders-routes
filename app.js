@@ -889,14 +889,12 @@ function parseDgtRoadworks(xmlText){
     const endDate=endNodes.map(node=>Date.parse(node.textContent||'')).find(Number.isFinite);
     if(Number.isFinite(endDate)&&endDate<Date.now())continue;
     const textForDescription=type+' '+plainText;
-    let description=descriptionParts.join(' · ');
-    if(!description){
-      if(/roadworks?|roadmaintenance|maintenancework/i.test(textForDescription))description='Obras de mantenimiento';
-      else if(/roadclosed|carriagewayclosed|laneclosed|road closure|lane closure/i.test(textForDescription))description='Corte o cierre de carretera';
-      else description='Obras o restricción en la vía';
-    }
+    let description;
+    if(/roadworks?|roadmaintenance|maintenancework/i.test(textForDescription))description='Obras de mantenimiento';
+    else if(/roadclosed|carriagewayclosed|laneclosed|road closure|lane closure/i.test(textForDescription))description='Cierre o restricción de carretera';
+    else description=descriptionParts.filter(value=>!/^([A-Z]{1,3}-?\\d+|Ma-\\d+)$/i.test(value))[0]||'Obras o restricción en la vía';
     const roadName=descendants.find(node=>['roadnumber','roadname'].includes(datexLocalName(node))&&String(node.textContent||'').trim());
-    if(roadName)description+=' · '+String(roadName.textContent||'').trim();
+    if(roadName&&!description.includes(String(roadName.textContent||'').trim()))description+=' · '+String(roadName.textContent||'').trim();
     const id=record.getAttribute('id')||type+':'+coordinates.map(p=>p.lat.toFixed(4)+','+p.lon.toFixed(4)).join(';');
     results.push({
       id:String(id),
@@ -910,14 +908,26 @@ function parseDgtRoadworks(xmlText){
 function matchRoadworksToRoute(incidents,shape){
   if(!Array.isArray(shape)||shape.length<2)return [];
   const cumulative=routeCumulative(shape);
-  return incidents.map(incident=>{
-    const matched=incident.coordinates.map(point=>{
+  const matched=incidents.map(incident=>{
+    const projected=incident.coordinates.map(point=>{
       const projection=nearestRouteProgress({latitude:point.lat,longitude:point.lon},shape,cumulative);
       return {...point,distance:projection.distance,along:projection.along};
     }).filter(point=>point.distance<=0.5).sort((a,b)=>a.along-b.along);
-    if(!matched.length)return null;
-    return {...incident,along:matched[0].along,routeCoordinates:matched.slice(0,12).map(point=>({lat:point.lat,lon:point.lon}))};
+    if(!projected.length)return null;
+    return {...incident,along:projected[0].along,routeCoordinates:projected.slice(0,12).map(point=>({lat:point.lat,lon:point.lon}))};
   }).filter(Boolean).sort((a,b)=>a.along-b.along);
+  const grouped=[];
+  for(const incident of matched){
+    const duplicate=grouped.find(existing=>
+      Math.abs(existing.along-incident.along)<0.18
+      && existing.routeCoordinates.some(a=>incident.routeCoordinates.some(b=>distanceKm(a,b)<0.12))
+    );
+    if(duplicate){
+      const all=[...duplicate.routeCoordinates,...incident.routeCoordinates];
+      duplicate.routeCoordinates=all.filter((point,index)=>all.findIndex(other=>distanceKm(point,other)<0.03)===index).slice(0,12);
+    }else grouped.push(incident);
+  }
+  return grouped;
 }
 function updateRoadworksUI(){
   const status=$('roadworkStatus');
@@ -1111,7 +1121,9 @@ async function acceptRoadworkDetour(){
     navigationRoadworksStatus='✅ Desvío recalculado por carreteras del mapa y comprobado para evitar los puntos de incidencia comunicados por la DGT.';
     $('mapStatus').textContent='✅ Desvío calculado. La ruta original se ha sustituido solo después de tu aceptación.';
     updateRoadworksUI();
-    startVoiceNavigation();
+    startVoiceNavigation({preserveRoadworkHandled:true});
+    navigationRoadworkStatus='✅ Desvío recalculado y navegación por voz actualizada. La incidencia aceptada queda marcada para no repetir el aviso.';
+    updateRoadworksUI();
     speakNavigation('Desvío recalculado. Sigue las nuevas indicaciones de voz de Mallorca Riders.');
   }catch(error){
     navigationRoadworksStatus='⚠️ No se ha podido verificar una alternativa. Se mantiene la ruta original. '+String(error?.message||error).slice(0,160);
@@ -1124,12 +1136,13 @@ async function acceptRoadworkDetour(){
   }
 }
 
-async function startVoiceNavigation(){
+async function startVoiceNavigation(options={}){
   if(!current?.shape?.length||current.shape.length<2){alert('Primero genera o abre una ruta.');return}
   if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
   if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
+  const preserveRoadworkHandled=options?.preserveRoadworkHandled===true;
   stopVoiceNavigation();
-  navigationRoadworks=[];navigationRoadworkAlerts.clear();navigationRoadworkHandled.clear();pendingRoadworkIncident=null;
+  navigationRoadworks=[];navigationRoadworkAlerts.clear();if(!preserveRoadworkHandled)navigationRoadworkHandled.clear();pendingRoadworkIncident=null;
   navigationRoadworksStatus='Consultando las incidencias oficiales de la DGT para esta ruta…';
   updateRoadworksUI();
   const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();
