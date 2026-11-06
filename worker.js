@@ -1,6 +1,6 @@
 const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","google.com","maps.google.com"]);
 const DGT_RESOURCE_ID = "1d36ea74-593d-4e45-acfa-fb8db5a460bc";
-const DGT_DOWNLOAD_URL = "https://nap.dgt.es/dataset/77be854a-6911-47dc-ba4c-b13067a50552/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml";
+const DGT_DOWNLOAD_URL = "https://nap.dgt.es/es/dataset/incidencias-dgt-datex2-v3-7/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml";
 let cachedDgtFeed = null;
 let cachedDgtFeedAt = 0;
 export default {
@@ -38,6 +38,24 @@ export default {
       } catch (error) {
         return Response.json({error:"No se pudo conectar con el motor de rutas.",detail:String(error?.message||error).slice(0,250)},{status:502,headers});
       }
+    }
+    if (url.pathname === "/api/health") {
+      const headers = {
+        "Access-Control-Allow-Origin": url.origin,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Accept",
+        "Cache-Control": "no-store",
+        "Vary": "Origin"
+      };
+      if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
+      if (request.method !== "GET") return Response.json({error:"Método no permitido."},{status:405,headers});
+      return Response.json({
+        status:"ok",
+        workerHost:url.hostname,
+        build:"mrr-roadworks-2026-11-06",
+        trafficEndpoint:"/api/traffic/incidents",
+        dgtResourceId:DGT_RESOURCE_ID
+      },{headers});
     }
     if (url.pathname === "/api/traffic/incidents") {
       const headers = {
