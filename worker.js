@@ -115,9 +115,10 @@ export default {
           const xmlLooksValid = /^<\?xml\b/i.test(trimmedXml)
             && !/<html[\s>]/i.test(trimmedXml)
             && /<[^!?][^>]*>/i.test(trimmedXml);
-          if (!xml || xml.length > 6000000 || !contentType.toLowerCase().includes("xml") || !xmlLooksValid || !isOfficialIncidentFeed) {
-            const preview = String(xml || "").slice(0,900).replace(/\s+/g," ").trim();
-            throw new Error("DATEX II no válido (tipo="+contentType+", ruta="+finalPath+", inicio="+preview+").");
+          const validSize = !!xml && xml.length <= 20000000;
+          if (!xml || !validSize || !contentType.toLowerCase().includes("xml") || !xmlLooksValid || !isOfficialIncidentFeed) {
+            const preview = String(xml || "").slice(0,260).replace(/\s+/g," ").trim();
+            throw new Error("DATEX II no válido (longitud="+String(xml||"").length+", tamaño="+validSize+", tipo="+contentType+", XML="+xmlLooksValid+", fuente="+isOfficialIncidentFeed+", ruta="+finalPath+", inicio="+preview+").");
           }
           cachedDgtFeed = xml;
           cachedDgtFeedAt = Date.now();
