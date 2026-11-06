@@ -52,7 +52,7 @@ export default {
       return Response.json({
         status:"ok",
         workerHost:url.hostname,
-        build:"mrr-roadworks-2026-11-06",
+        build:"mrr-roadworks-2026-11-06-v2",
         trafficEndpoint:"/api/traffic/incidents",
         dgtResourceId:DGT_RESOURCE_ID
       },{headers});
