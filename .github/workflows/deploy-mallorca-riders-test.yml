@@ -111,25 +111,59 @@ jobs:
           if [ "$STATUS" = "200" ] && grep -Eiq '<[^>]*(d2LogicalModel|situationPublication|SituationPublication)' "$BODY"; then
             echo "DGT feed probe: valid DATEX II XML received."
             python3 - "$BODY" <<'PY'
-          import sys
+          import re, sys
           import xml.etree.ElementTree as ET
           root = ET.parse(sys.argv[1]).getroot()
           def local(tag):
               return tag.rsplit("}", 1)[-1].split(":")[-1].lower()
           records = [node for node in root.iter() if local(node.tag) == "situationrecord"]
-          types = set()
-          located = 0
+          types, geometry_counts = set(), {"pointcoordinates":0,"latlon":0,"pos":0,"poslist":0}
+          located = work_candidates = work_with_geometry = 0
+          samples = []
+          work_type = re.compile(r"roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure|generalobstruction", re.I)
+          work_text = re.compile(r"\\b(obras?|trabajos de mantenimiento|corte(?:s)? de carretera|carretera cortada|calzada cortada|carril cortado|desvío|desvio)\\b|\\broadworks?\\b|\\broad closed\\b|\\blane closure\\b", re.I)
           for record in records:
-              for key, value in record.attrib.items():
-                  if local(key) == "type":
-                      types.add(value.split(":")[-1])
-              names = {local(node.tag) for node in record.iter()}
-              if "pointcoordinates" in names or "poslist" in names or "pos" in names:
-                  located += 1
+              kind = next((value.split(":")[-1] for key,value in record.attrib.items() if local(key)=="type"), "")
+              types.add(kind)
+              nodes = list(record.iter())
+              names = [local(node.tag) for node in nodes]
+              geometry_counts["pointcoordinates"] += names.count("pointcoordinates")
+              geometry_counts["pos"] += names.count("pos")
+              geometry_counts["poslist"] += names.count("poslist")
+              has_latlon = "latitude" in names and "longitude" in names
+              geometry_counts["latlon"] += int(has_latlon)
+              coordinates = []
+              for container in [node for node in nodes if local(node.tag)=="pointcoordinates"]:
+                  child = list(container.iter())
+                  lat = next((node.text for node in child if local(node.tag)=="latitude" and node.text),None)
+                  lon = next((node.text for node in child if local(node.tag)=="longitude" and node.text),None)
+                  if lat and lon: coordinates.append((lat,lon))
+              if not coordinates and has_latlon:
+                  lats=[node.text for node in nodes if local(node.tag)=="latitude" and node.text]
+                  lons=[node.text for node in nodes if local(node.tag)=="longitude" and node.text]
+                  coordinates.extend(zip(lats,lons))
+              if not coordinates:
+                  for node in nodes:
+                      name=local(node.tag)
+                      if name in ("pos","poslist") and node.text:
+                          vals=node.text.strip().replace(",", " ").split()
+                          if len(vals)>=2: coordinates.append((vals[0],vals[1]))
+              if coordinates: located += 1
+              full_text=" ".join((node.text or "").strip() for node in nodes)
+              is_work=bool(work_type.search(kind) or work_text.search(full_text))
+              if is_work:
+                  work_candidates += 1
+                  if coordinates: work_with_geometry += 1
+                  if len(samples)<4:
+                      samples.append({"type":kind,"coordinate_examples":coordinates[:2],"text":full_text[:240]})
           print("DATEX root:", local(root.tag))
           print("SituationRecord count:", len(records))
-          print("Records with coordinate geometry:", located)
+          print("Records with coordinate geometry (same extraction path as app):", located)
+          print("Geometry element counts:", geometry_counts)
+          print("Potential works/closures/descriptions:", work_candidates)
+          print("Potential works with extractable coordinates:", work_with_geometry)
           print("SituationRecord types:", ", ".join(sorted(types)) or "(none in this feed)")
+          print("Sample work records:", samples)
           PY
           else
             echo "DGT feed probe: NOT VERIFIED. Response follows:"
