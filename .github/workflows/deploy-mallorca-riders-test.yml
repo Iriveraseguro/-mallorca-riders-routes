@@ -72,3 +72,45 @@ jobs:
         run: |
           echo "All test Worker deployment attempts failed."
           exit 1
+
+      - name: Verify deployed test Worker and application assets
+        if: steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' || steps.deploy3.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev"
+          HEALTH=""
+          for attempt in 1 2 3 4 5; do
+            HEALTH="$(curl -fsS --max-time 20 "$BASE/api/health" || true)"
+            if echo "$HEALTH" | grep -q '"workerHost":"mallorca-riders-proxy-test.i-riveraseguro.workers.dev"'; then break; fi
+            sleep 5
+          done
+          echo "$HEALTH"
+          echo "$HEALTH" | grep -q '"status":"ok"'
+          echo "$HEALTH" | grep -q '"build":"mrr-roadworks-2026-11-06"'
+          HTML="$(curl -fsS --max-time 20 "$BASE/")"
+          echo "$HTML" | grep -q 'app.js?v=75'
+          APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=75")"
+          echo "$APP" | grep -q 'function parseDgtRoadworks'
+          echo "$APP" | grep -q 'async function acceptRoadworkDetour'
+          SW="$(curl -fsS --max-time 20 "$BASE/sw.js")"
+          echo "$SW" | grep -q 'mrr-v17-roadworks-fix'
+          echo "Verified: test Worker, app.js v75, roadworks parser, detour handler and service-worker cache."
+
+      - name: Probe live DGT traffic feed
+        if: steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' || steps.deploy3.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          BASE="https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev"
+          BODY="$(mktemp)"
+          STATUS="$(curl -sS --max-time 35 -o "$BODY" -w '%{http_code}' "$BASE/api/traffic/incidents" || true)"
+          echo "DGT endpoint HTTP status: $STATUS"
+          if [ "$STATUS" = "200" ] && grep -Eiq '<[^>]*(d2LogicalModel|situationPublication|SituationPublication)' "$BODY"; then
+            echo "DGT feed probe: valid DATEX II XML received."
+          else
+            echo "DGT feed probe: NOT VERIFIED. Response follows:"
+            head -c 1200 "$BODY" || true
+          fi
+          rm -f "$BODY"
