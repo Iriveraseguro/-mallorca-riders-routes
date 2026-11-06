@@ -119,7 +119,7 @@ jobs:
           records = [node for node in root.iter() if local(node.tag) == "situationrecord"]
           types, geometry_counts = set(), {"pointcoordinates":0,"latlon":0,"pos":0,"poslist":0}
           located = work_candidates = work_with_geometry = balearic_work_records = 0
-          samples = []
+          samples, balearic_samples = [], []
           work_type = re.compile(r"roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure", re.I)
           work_text = re.compile(r"\b(obras?|trabajos de mantenimiento|corte(?:s)? de carretera|carretera cortada|calzada cortada|carril cortado|desvío|desvio)\b|\broadworks?\b|\broad closed\b|\blane closure\b", re.I)
           for record in records:
@@ -154,10 +154,15 @@ jobs:
               if is_work:
                   work_candidates += 1
                   if coordinates: work_with_geometry += 1
-                  if any(38.6 <= float(lat) <= 40.2 and 1.0 <= float(lon) <= 4.5 for lat,lon in coordinates):
+                  is_balearic = any(38.6 <= float(lat) <= 40.2 and 1.0 <= float(lon) <= 4.5 for lat,lon in coordinates)
+                  if is_balearic:
                       balearic_work_records += 1
+                      if len(balearic_samples)<8:
+                          time_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if "time" in local(node.tag) and (node.text or "").strip()]
+                          balearic_samples.append({"type":kind,"coordinates":coordinates[:3],"times":time_fields[:12],"text":full_text[:260]})
                   if len(samples)<4:
-                      samples.append({"type":kind,"coordinate_examples":coordinates[:2],"text":full_text[:240]})
+                      time_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if "time" in local(node.tag) and (node.text or "").strip()]
+                      samples.append({"type":kind,"coordinate_examples":coordinates[:2],"times":time_fields[:8],"text":full_text[:240]})
           print("DATEX root:", local(root.tag))
           print("SituationRecord count:", len(records))
           print("Records with coordinate geometry (same extraction path as app):", located)
@@ -167,6 +172,7 @@ jobs:
           print("Potential works in Balearic bounding area:", balearic_work_records)
           print("SituationRecord types:", ", ".join(sorted(types)) or "(none in this feed)")
           print("Sample work records:", samples)
+          print("Sample Balearic work records with date/time fields:", balearic_samples)
           PY
           else
             echo "DGT feed probe: NOT VERIFIED. Response follows:"
