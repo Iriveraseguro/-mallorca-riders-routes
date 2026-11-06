@@ -431,9 +431,9 @@ function buildRouteCandidates(plan){
       const j=Math.floor(Math.random()*(i+1));
       [source[i],source[j]]=[source[j],source[i]];
     }
-    source.slice(0,3).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
+    source.slice(0,2).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
   }
-  return candidates.slice(0,4);
+  return candidates.slice(0,3);
 }
 function routeOverlapPenalty(coords){
   if(!Array.isArray(coords)||coords.length<30)return 0;
