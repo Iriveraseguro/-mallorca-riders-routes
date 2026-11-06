@@ -951,6 +951,9 @@ function checkRoadworksForProgress(position,progress){
       state.three=true;
       incident.displayRemaining=remaining;
       if(!pendingRoadworkIncident||pendingRoadworkIncident.id===incident.id)showRoadworkDecision(incident);
+    }else if(pendingRoadworkIncident?.id===incident.id){
+      incident.displayRemaining=remaining;
+      updateRoadworksUI();
     }
     navigationRoadworkAlerts.set(incident.id,state);
   }
@@ -1067,6 +1070,9 @@ async function startVoiceNavigation(){
   if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
   if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
   stopVoiceNavigation();
+  navigationRoadworks=[];navigationRoadworkAlerts.clear();pendingRoadworkIncident=null;
+  navigationRoadworksStatus='Consultando las incidencias oficiales de la DGT para esta ruta…';
+  updateRoadworksUI();
   const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();
   speakNavigation('Navegación de Mallorca Riders activada. Sigue la ruta y escucha las indicaciones.');
   $('voiceNavigate')?.classList.add('active');
@@ -1151,6 +1157,10 @@ async function generateRoute(){
     return;
   }
   const plan=routePlan();if(!plan)return;
+  stopVoiceNavigation();
+  navigationRoadworks=[];navigationRoadworkAlerts.clear();navigationRoadworkHandled.clear();pendingRoadworkIncident=null;
+  navigationRoadworksStatus='Los avisos de obras se consultan al iniciar la navegación por voz.';
+  updateRoadworksUI();
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';
   $('mapStatus').textContent='🧭 Comparando alternativas para acercarnos a los km y duración elegidos…';clearRoute();
   try{
