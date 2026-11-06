@@ -39,3 +39,5 @@
   .screenshot-overlay-buttons{grid-template-columns:repeat(3,minmax(0,1fr))}
   .screenshot-overlay-buttons .map-button{font-size:12px}
 }
+
+.safety-camera-marker{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#f59e0b;border:2px solid #fff;box-shadow:0 2px 8px #0009;font-size:18px}.route-direction-arrow{color:#1683ff}
