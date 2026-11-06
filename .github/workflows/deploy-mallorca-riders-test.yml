@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mallorca-riders-test-worker
+  cancel-in-progress: true
+
 jobs:
   deploy-test:
     runs-on: ubuntu-latest
