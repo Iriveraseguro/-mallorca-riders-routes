@@ -87,14 +87,14 @@ jobs:
           done
           echo "$HEALTH"
           echo "$HEALTH" | grep -q '"status":"ok"'
-          echo "$HEALTH" | grep -q '"build":"mrr-roadworks-2026-11-06"'
+          echo "$HEALTH" | grep -q '"build":"mrr-roadworks-2026-11-06-v2"'
           HTML="$(curl -fsS --max-time 20 "$BASE/")"
-          echo "$HTML" | grep -q 'app.js?v=75'
+          echo "$HTML" | grep -q 'app.js?v=76'
           APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=75")"
           echo "$APP" | grep -q 'function parseDgtRoadworks'
           echo "$APP" | grep -q 'async function acceptRoadworkDetour'
           SW="$(curl -fsS --max-time 20 "$BASE/sw.js")"
-          echo "$SW" | grep -q 'mrr-v17-roadworks-fix'
+          echo "$SW" | grep -q 'mrr-v18-adaptive-roadworks'
           echo "Verified: test Worker, app.js v75, roadworks parser, detour handler and service-worker cache."
 
       - name: Probe live DGT traffic feed
