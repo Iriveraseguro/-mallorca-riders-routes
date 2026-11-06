@@ -378,11 +378,26 @@ function routePlan(){
   const durationHours=parseFloat($('duration').value||'3')||3;
   return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),requestedMinutes:durationHours*60,curves:Number($('curves').value)||3,type,label:st.label,region,manual:manualRouteActive};
 }
+function routeTargetSignature(targets){
+  return targets.map(p=>p.name||`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`).join('|');
+}
+function routeHistoryKey(plan){return `mrr-route-history:${plan.region}:${plan.type}`;}
+function readRouteHistory(plan){
+  try{return JSON.parse(localStorage.getItem(routeHistoryKey(plan))||'[]').filter(x=>typeof x==='string').slice(-8)}
+  catch(_){return []}
+}
+function rememberRouteChoice(plan,signature){
+  try{
+    const history=readRouteHistory(plan).filter(x=>x!==signature);
+    history.push(signature);
+    localStorage.setItem(routeHistoryKey(plan),JSON.stringify(history.slice(-8)));
+  }catch(error){console.warn('No se pudo guardar el historial de variedad',error)}
+}
 function buildRouteCandidates(plan){
   const candidates=[];
   const add=(targets,variant)=>{
     if(!targets?.length)return;
-    const signature=targets.map(p=>p.name||`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`).join('|');
+    const signature=routeTargetSignature(targets);
     if(candidates.some(c=>c.signature===signature))return;
     candidates.push({...plan,targets,signature,variant});
   };
@@ -406,7 +421,17 @@ function buildRouteCandidates(plan){
       combos.push({trio,score:radialError+spreadPenalty*8});
     }
     combos.sort((a,b)=>a.score-b.score);
-    combos.slice(0,3).forEach((combo,index)=>add(combo.trio,`circular-${index+1}`));
+    // Antes se elegían siempre las tres combinaciones mejor puntuadas.
+    // Ahora se explora un grupo más amplio y se evita repetir las usadas recientemente.
+    const recent=new Set(readRouteHistory(plan));
+    const top=combos.slice(0,Math.min(10,combos.length));
+    const unseen=top.filter(combo=>!recent.has(routeTargetSignature(combo.trio)));
+    const source=unseen.length>=3?unseen:top;
+    for(let i=source.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [source[i],source[j]]=[source[j],source[i]];
+    }
+    source.slice(0,2).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
   }
   return candidates.slice(0,3);
 }
@@ -451,6 +476,17 @@ function routeScore(result,plan){
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
   const overlapPenalty=$('circle').checked?routeOverlapPenalty(result.coords)*1.25:0;
   return kmError*0.78+timeError*0.22+overlapPenalty;
+}
+function chooseRouteCandidate(valid,plan){
+  if(valid.length===1)return valid[0];
+  const recent=new Set(readRouteHistory(plan));
+  const unseen=valid.filter(item=>!recent.has(item.candidate.signature));
+  const pool=unseen.length?unseen:valid;
+  pool.sort((a,b)=>a.score-b.score);
+  // Entre rutas de calidad parecida, variar el recorrido en vez de elegir siempre la primera.
+  const best=pool[0].score;
+  const close=pool.filter(item=>item.score<=best+0.06).slice(0,3);
+  return close[Math.floor(Math.random()*close.length)];
 }
 
 function decodePolyline6(str){
@@ -716,6 +752,133 @@ async function requestRoute(locations,plan){
   if(ISLANDS[plan.region]&&!routeShapeIsInRegion(coords,plan.region,boundary))throw new Error('ROUTE_LEFT_ISLAND');
   return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration}};
 }
+
+// Navegación por voz y avisos de seguridad en ruta (mejor esfuerzo en segundo plano en iOS).
+let navigationWatchId=null,navigationCues=[],navigationAnnouncedFar=new Set(),navigationAnnouncedNear=new Set(),navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[];
+function speakNavigation(message){
+  if(!('speechSynthesis' in window)||!message)return;
+  try{window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(message);utterance.lang='es-ES';utterance.rate=1;utterance.volume=1;window.speechSynthesis.speak(utterance)}catch(error){console.warn('No se pudo reproducir la indicación de voz',error)}
+}
+function routeCumulative(shape){
+  const cumulative=[0];
+  for(let i=1;i<shape.length;i++)cumulative[i]=cumulative[i-1]+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:shape[i][0],lon:shape[i][1]});
+  return cumulative;
+}
+function bearingBetween(a,b){
+  const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+  return (Math.atan2(Math.sin(dl)*Math.cos(p2),Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl))*180/Math.PI+360)%360;
+}
+function buildNavigationCues(shape){
+  const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0,cues=[];
+  const at=d=>{let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;return [shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f]};
+  for(let d=0.18;d<total-0.18;d+=0.10){
+    const before=at(Math.max(0,d-0.16)),pivot=at(d),after=at(Math.min(total,d+0.16));
+    const incoming=bearingBetween(before,pivot),outgoing=bearingBetween(pivot,after);
+    const angle=((outgoing-incoming+540)%360)-180;
+    if(Math.abs(angle)<42)continue;
+    const last=cues[cues.length-1];if(last&&d-last.distance<0.30)continue;
+    cues.push({distance:d,text:Math.abs(angle)>145?'Giro muy cerrado; reduce la velocidad':angle>0?'Gira a la derecha':'Gira a la izquierda'});
+  }
+  return {cues,cumulative,total};
+}
+function nearestRouteProgress(point,shape,cumulative){
+  let best={distance:Infinity,along:0};
+  for(let i=1;i<shape.length;i++){
+    const a=shape[i-1],b=shape[i],lat=(a[0]+b[0])/2*Math.PI/180;
+    const scaleX=111.32*Math.cos(lat),scaleY=110.57;
+    const ax=(a[1]-point.longitude)*scaleX,ay=(a[0]-point.latitude)*scaleY;
+    const bx=(b[1]-point.longitude)*scaleX,by=(b[0]-point.latitude)*scaleY;
+    const dx=bx-ax,dy=by-ay,den=dx*dx+dy*dy;
+    const t=den?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/den)):0;
+    const d=Math.hypot(ax+t*dx,ay+t*dy);
+    if(d<best.distance)best={distance:d,along:cumulative[i-1]+(cumulative[i]-cumulative[i-1])*t};
+  }
+  return best;
+}
+function stopVoiceNavigation(){
+  if(navigationWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(navigationWatchId);
+  navigationWatchId=null;
+  if('speechSynthesis' in window)window.speechSynthesis.cancel();
+  $('voiceNavigate')?.classList.remove('active');
+  if($('mapStatus'))$('mapStatus').textContent='🔇 Navegación por voz detenida.';
+}
+async function startVoiceNavigation(){
+  if(!current?.shape?.length||current.shape.length<2){alert('Primero genera o abre una ruta.');return}
+  if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
+  if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
+  stopVoiceNavigation();
+  const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();
+  speakNavigation('Navegación de Mallorca Riders activada. Sigue la ruta y escucha las indicaciones.');
+  $('voiceNavigate')?.classList.add('active');
+  $('mapStatus').textContent='🗣️ Navegación por voz activa. Mantén la app abierta para que el iPhone siga enviando indicaciones.';
+  navigationWatchId=navigator.geolocation.watchPosition(position=>{
+    const progress=nearestRouteProgress(position.coords,current.shape,built.cumulative);
+    if(progress.distance>0.18){$('mapStatus').textContent='⚠️ Estás lejos de la ruta. Comprueba el recorrido en un lugar seguro.';return}
+    navigationCues.forEach((cue,index)=>{
+      const remaining=(cue.distance-progress.along)*1000;
+      if(remaining<=450&&remaining>140&&!navigationAnnouncedFar.has(index)){speakNavigation('En unos '+Math.max(100,Math.round(remaining/50)*50)+' metros. '+cue.text);navigationAnnouncedFar.add(index)}
+      if(remaining<=140&&remaining>=-35&&!navigationAnnouncedNear.has(index)){speakNavigation(cue.text);navigationAnnouncedNear.add(index)}
+    });
+    navigationCameras.forEach(camera=>{
+      const key=String(camera.id),d=distanceKm({lat:position.coords.latitude,lon:position.coords.longitude},{lat:camera.lat,lon:camera.lon});
+      if(d<=0.5&&!navigationLastCameraAlerts.has(key)){navigationLastCameraAlerts.add(key);speakNavigation('Atención. Punto de control de velocidad próximo. Respeta la señalización y el límite de velocidad.')}
+    });
+  },error=>{$('mapStatus').textContent='⚠️ No se puede seguir tu GPS: '+(error.message||'comprueba los permisos')},{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+}
+async function findSpeedCameras(shape){
+  try{
+    const samples=[],cum=routeCumulative(shape),total=cum[cum.length-1]||0;
+    const step=Math.max(1,total/48);
+    for(let d=0;d<=total;d+=step){let i=1;while(i<cum.length-1&&cum[i]<d)i++;const p=shape[i];samples.push([Number(p[0]).toFixed(5),Number(p[1]).toFixed(5)])}
+    const coords=[...new Map(samples.map(p=>[p.join(','),p])).values()];
+    if(!coords.length)return [];
+    const query='[out:json][timeout:20];(node["highway"="speed_camera"](around:500,'+coords.map(p=>p.join(',')).join(',')+'););out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+    let response;try{response=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const data=await response.json();
+    return (data.elements||[]).map(el=>({id:el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:el.tags?.name||'Punto de control de velocidad',source:'OpenStreetMap'})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
+  }catch(error){console.warn('No se pudieron consultar los puntos de control',error);return []}
+}
+function drawSafetyCameras(cameras){
+  navigationCameraMarkers.forEach(marker=>map?.removeLayer(marker));navigationCameraMarkers=[];
+  cameras.forEach(camera=>{
+    const icon=L.divIcon({className:'poi-div-icon',html:'<div class="safety-camera-marker">⚠️</div>',iconSize:[32,32],iconAnchor:[16,16]});
+    const marker=L.marker([camera.lat,camera.lon],{icon}).addTo(map).bindPopup('⚠️ Punto de control de velocidad<br>Dato colaborativo de OpenStreetMap; puede estar incompleto o desactualizado.');
+    navigationCameraMarkers.push(marker);
+  });
+}
+async function reverseCurrentRoute(){
+  if(!current?.shape||current.shape.length<2){alert('Primero genera, importa o abre una ruta.');return}
+  const button=$('reverseRoute');if(button){button.disabled=true;button.textContent='⏳ Recalculando…'}
+  stopVoiceNavigation();
+  try{
+    const shape=current.shape;
+    const start={lat:Number(shape[shape.length-1][0]),lon:Number(shape[shape.length-1][1])};
+    const end={lat:Number(shape[0][0]),lon:Number(shape[0][1])};
+    const waypoints=(Array.isArray(current.routePoints)?current.routePoints:[])
+      .slice().reverse()
+      .filter(p=>Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon)))
+      .map(p=>({lat:Number(p.lat),lon:Number(p.lon),name:p.name||'Punto de paso'}));
+    // Solo enviamos los puntos de paso reales, nunca decenas de puntos de la geometría.
+    // Valhalla recibe exclusivamente los campos admitidos por su esquema de locations.
+    const locations=[start,...waypoints,end].filter((p,i,all)=>{
+      if(i===0)return true;
+      const previous=all[i-1];
+      return distanceKm(previous,p)>0.08;
+    }).map(p=>({lat:p.lat,lon:p.lon,type:'break'}));
+    const detectedRegion=detectIsland({latitude:start.lat,longitude:start.lon});
+    const plan={region:detectedRegion||current.region||'peninsula',type:current.type||'Mixta'};
+    const result=await requestRoute(locations,plan);
+    const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
+    current={...current,shape:result.coords,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:waypoints,direction:current.direction==='inversa'?'normal':'inversa',realStops:current.realStops||[]};
+    current.realStop=current.realStops[0]||null;
+    drawSharedRoute(current);render(current);
+    $('mapStatus').textContent='🔄 Sentido inverso recalculado por carreteras. Revisa la ruta antes de salir.';
+  }catch(error){console.error('No se pudo invertir la ruta',error);alert('No he podido recalcular el sentido inverso por carretera: '+(error.message||'error de conexión'))}
+  finally{if(button){button.disabled=false;button.textContent='↔️ Invertir sentido'}}
+}
+
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
     $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Para no dibujar una ruta en otra zona, importa un enlace/archivo de ruta o pulsa «Marcar puntos manualmente» y coloca al menos 2 puntos sobre el mapa.';
@@ -738,8 +901,9 @@ async function generateRoute(){
     }));
     const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
     if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
-    valid.sort((a,b)=>a.score-b.score);
-    const {result,candidate:chosen}=valid[0];
+    const selected=chooseRouteCandidate(valid,plan);
+    const {result,candidate:chosen}=selected;
+    rememberRouteChoice(plan,chosen.signature);
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(result.coords);
     if(!plan.manual){
@@ -766,7 +930,8 @@ async function generateRoute(){
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    navigationCameras=await findSpeedCameras(result.coords);drawSafetyCameras(navigationCameras);
+     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
@@ -808,6 +973,8 @@ function render(r){
   }
   $('result').innerHTML=
     '<h2>🏍️ '+escapeHtml(r.name)+'</h2>'+
+    (r.direction==='inversa'?'<div class="warning">↩️ Sentido inverso</div>':'')+
+    (navigationCameras.length?'<div class="warning">⚠️ '+navigationCameras.length+' puntos de control encontrados en OpenStreetMap. Datos colaborativos: pueden faltar ubicaciones o estar desactualizados; respeta siempre la señalización.</div>':'')+
     '<small>📍 '+(r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region))+
     ' · Creada por '+escapeHtml(r.createdBy||'un motero')+
     ' · '+(r.circular?'ruta circular':'ruta lineal')+
@@ -823,6 +990,9 @@ function render(r){
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
       '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
+      '<button class="secondary" id="reverseRoute" onclick="reverseCurrentRoute()">↔️ Invertir sentido</button>'+
+      '<button class="secondary" id="voiceNavigate" onclick="startVoiceNavigation()">🗣️ Iniciar navegación por voz</button>'+
+      '<button class="secondary" onclick="stopVoiceNavigation()">🔇 Detener voz</button>'+
       '<button class="secondary" onclick="document.getElementById(\'generate\').click()">🔄 Otra ruta</button>'+
     '</div>'+
     sharePanel;
@@ -917,6 +1087,7 @@ async function copySharedRouteLink(){
 function drawSharedRoute(route){
   if(!map||!Array.isArray(route?.shape)||route.shape.length<2)return;
   clearRoute();
+  findSpeedCameras(route.shape).then(cameras=>{if(current?.shape===route.shape){navigationCameras=cameras;drawSafetyCameras(cameras);render(current)}});
   routeLine=L.polyline(route.shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(route.shape);
   (route.routePoints||[]).forEach((p,i)=>{
     const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
