@@ -718,7 +718,7 @@ async function requestRoute(locations,plan){
 }
 
 // Navegación por voz y avisos de seguridad en ruta (mejor esfuerzo en segundo plano en iOS).
-let navigationWatchId=null,navigationCues=[],navigationLastCue=-1,navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[];
+let navigationWatchId=null,navigationCues=[],navigationAnnouncedFar=new Set(),navigationAnnouncedNear=new Set(),navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[];
 function speakNavigation(message){
   if(!('speechSynthesis' in window)||!message)return;
   try{window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(message);utterance.lang='es-ES';utterance.rate=1;utterance.volume=1;window.speechSynthesis.speak(utterance)}catch(error){console.warn('No se pudo reproducir la indicación de voz',error)}
@@ -735,11 +735,13 @@ function bearingBetween(a,b){
 function buildNavigationCues(shape){
   const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0,cues=[];
   const at=d=>{let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;return [shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f]};
-  for(let d=0.18;d<total-0.18;d+=0.12){
-    const before=at(Math.max(0,d-0.08)),after=at(Math.min(total,d+0.08)),angle=((bearingBetween(before,after)+540)%360)-180;
-    if(Math.abs(angle)<38)continue;
-    const last=cues[cues.length-1];if(last&&d-last.distance<0.35)continue;
-    cues.push({distance:d,text:Math.abs(angle)>145?'Haz un giro en U cuando sea seguro':angle>0?'Gira a la derecha':'Gira a la izquierda'});
+  for(let d=0.18;d<total-0.18;d+=0.10){
+    const before=at(Math.max(0,d-0.16)),pivot=at(d),after=at(Math.min(total,d+0.16));
+    const incoming=bearingBetween(before,pivot),outgoing=bearingBetween(pivot,after);
+    const angle=((outgoing-incoming+540)%360)-180;
+    if(Math.abs(angle)<42)continue;
+    const last=cues[cues.length-1];if(last&&d-last.distance<0.30)continue;
+    cues.push({distance:d,text:Math.abs(angle)>145?'Giro muy cerrado; reduce la velocidad':angle>0?'Gira a la derecha':'Gira a la izquierda'});
   }
   return {cues,cumulative,total};
 }
@@ -747,9 +749,13 @@ function nearestRouteProgress(point,shape,cumulative){
   let best={distance:Infinity,along:0};
   for(let i=1;i<shape.length;i++){
     const a=shape[i-1],b=shape[i],lat=(a[0]+b[0])/2*Math.PI/180;
-    const x=(point.longitude-(a[1]+b[1])/2)*Math.cos(lat),y=point.latitude-(a[0]+b[0])/2;
-    const d=Math.hypot(x,y)*111.2;
-    if(d<best.distance)best={distance:d,along:cumulative[i-1]+(cumulative[i]-cumulative[i-1])*0.5};
+    const scaleX=111.32*Math.cos(lat),scaleY=110.57;
+    const ax=(a[1]-point.longitude)*scaleX,ay=(a[0]-point.latitude)*scaleY;
+    const bx=(b[1]-point.longitude)*scaleX,by=(b[0]-point.latitude)*scaleY;
+    const dx=bx-ax,dy=by-ay,den=dx*dx+dy*dy;
+    const t=den?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/den)):0;
+    const d=Math.hypot(ax+t*dx,ay+t*dy);
+    if(d<best.distance)best={distance:d,along:cumulative[i-1]+(cumulative[i]-cumulative[i-1])*t};
   }
   return best;
 }
@@ -765,15 +771,18 @@ async function startVoiceNavigation(){
   if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
   if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
   stopVoiceNavigation();
-  const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationLastCue=-1;navigationLastCameraAlerts=new Set();
+  const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();
   speakNavigation('Navegación de Mallorca Riders activada. Sigue la ruta y escucha las indicaciones.');
   $('voiceNavigate')?.classList.add('active');
   $('mapStatus').textContent='🗣️ Navegación por voz activa. Mantén la app abierta para que el iPhone siga enviando indicaciones.';
   navigationWatchId=navigator.geolocation.watchPosition(position=>{
     const progress=nearestRouteProgress(position.coords,current.shape,built.cumulative);
     if(progress.distance>0.18){$('mapStatus').textContent='⚠️ Estás lejos de la ruta. Comprueba el recorrido en un lugar seguro.';return}
-    const next=navigationCues.findIndex((cue,index)=>index>navigationLastCue&&cue.distance-progress.along<=0.40);
-    if(next>=0){const cue=navigationCues[next],remaining=Math.max(0,Math.round((cue.distance-progress.along)*1000));if(remaining<=400){speakNavigation(remaining>160?'En unos '+remaining+' metros. '+cue.text:cue.text);navigationLastCue=next}}
+    navigationCues.forEach((cue,index)=>{
+      const remaining=(cue.distance-progress.along)*1000;
+      if(remaining<=450&&remaining>140&&!navigationAnnouncedFar.has(index)){speakNavigation('En unos '+Math.max(100,Math.round(remaining/50)*50)+' metros. '+cue.text);navigationAnnouncedFar.add(index)}
+      if(remaining<=140&&remaining>=-35&&!navigationAnnouncedNear.has(index)){speakNavigation(cue.text);navigationAnnouncedNear.add(index)}
+    });
     navigationCameras.forEach(camera=>{
       const key=String(camera.id),d=distanceKm({lat:position.coords.latitude,lon:position.coords.longitude},{lat:camera.lat,lon:camera.lon});
       if(d<=0.5&&!navigationLastCameraAlerts.has(key)){navigationLastCameraAlerts.add(key);speakNavigation('Atención. Punto de control de velocidad próximo. Respeta la señalización y el límite de velocidad.')}
@@ -782,13 +791,14 @@ async function startVoiceNavigation(){
 }
 async function findSpeedCameras(shape){
   try{
-    const samples=[],total=routeCumulative(shape).at(-1)||0;
+    const samples=[],cum=routeCumulative(shape),total=cum[cum.length-1]||0;
     const step=Math.max(1,total/48);
-    for(let d=0;d<=total;d+=step){let i=1;const cum=routeCumulative(shape);while(i<cum.length-1&&cum[i]<d)i++;const p=shape[i];samples.push([Number(p[0]).toFixed(5),Number(p[1]).toFixed(5)])}
+    for(let d=0;d<=total;d+=step){let i=1;while(i<cum.length-1&&cum[i]<d)i++;const p=shape[i];samples.push([Number(p[0]).toFixed(5),Number(p[1]).toFixed(5)])}
     const coords=[...new Map(samples.map(p=>[p.join(','),p])).values()];
     if(!coords.length)return [];
     const query='[out:json][timeout:20];(node["highway"="speed_camera"](around:500,'+coords.map(p=>p.join(',')).join(',')+'););out center tags;';
-    const response=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query});
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+    let response;try{response=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
     if(!response.ok)throw new Error('HTTP '+response.status);
     const data=await response.json();
     return (data.elements||[]).map(el=>({id:el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:el.tags?.name||'Punto de control de velocidad',source:'OpenStreetMap'})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
@@ -811,7 +821,7 @@ async function reverseCurrentRoute(){
     const sampleAt=d=>{let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;return {lat:shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,lon:shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f}};
     const samples=[];for(let d=7;d<total-1;d+=7)samples.push(sampleAt(d));
     const reversed=[{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]},...samples.reverse(),{lat:shape[0][0],lon:shape[0][1]}];
-    const compact=reversed.filter((p,i)=>!i||distanceKm(reversed[i-1],p)>0.5);
+    const compact=reversed.filter((p,i)=>i===0||i===reversed.length-1||distanceKm(reversed[i-1],p)>0.5);
     const plan={region:current.region||$('region').value,type:current.type||'Mixta'};
     const result=await requestRoute(compact.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[plan.region]?{exclude_ferry:true}:{}})),plan);
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
@@ -916,6 +926,8 @@ function render(r){
   }
   $('result').innerHTML=
     '<h2>🏍️ '+escapeHtml(r.name)+'</h2>'+
+    (r.direction==='inversa'?'<div class="warning">↩️ Sentido inverso</div>':'')+
+    (navigationCameras.length?'<div class="warning">⚠️ '+navigationCameras.length+' puntos de control encontrados en OpenStreetMap. Datos colaborativos: pueden faltar ubicaciones o estar desactualizados; respeta siempre la señalización.</div>':'')+
     '<small>📍 '+(r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region))+
     ' · Creada por '+escapeHtml(r.createdBy||'un motero')+
     ' · '+(r.circular?'ruta circular':'ruta lineal')+
