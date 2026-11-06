@@ -120,7 +120,7 @@ jobs:
           types, geometry_counts = set(), {"pointcoordinates":0,"latlon":0,"pos":0,"poslist":0}
           located = work_candidates = work_with_geometry = balearic_work_records = 0
           samples = []
-          work_type = re.compile(r"roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure|generalobstruction", re.I)
+          work_type = re.compile(r"roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure", re.I)
           work_text = re.compile(r"\\b(obras?|trabajos de mantenimiento|corte(?:s)? de carretera|carretera cortada|calzada cortada|carril cortado|desvío|desvio)\\b|\\broadworks?\\b|\\broad closed\\b|\\blane closure\\b", re.I)
           for record in records:
               kind = next((value.split(":")[-1] for key,value in record.attrib.items() if local(key)=="type"), "")
