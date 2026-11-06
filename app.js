@@ -30,14 +30,18 @@ function showPosition(p){
   userAccuracy=L.circle(latlng,{radius:p.coords.accuracy,color:'#1683ff',weight:1,fillOpacity:.08}).addTo(map);
   map.setView(latlng,13);
   const detected=detectIsland(pos);
-  if(detected){
+  if(detected&&$('useMyLocation')?.checked){
     $('region').value=detected;
     updateRegionUI();
-    $('locStatus').textContent=`✅ Ubicación obtenida · ${ISLANDS[detected].name}`;
+    $('locStatus').textContent=`✅ Se usará tu ubicación como salida · ${ISLANDS[detected].name}`;
+    $('mapStatus').textContent=`📍 Tu ubicación será el punto de partida en ${ISLANDS[detected].name}.`;
+  }else if(detected){
+    $('locStatus').textContent=`✅ Ubicación encontrada · ${ISLANDS[detected].name}. No se usará como salida.`;
+    $('mapStatus').textContent='📍 Tu posición está en el mapa, pero la ruta empezará en el punto habitual de la zona.';
   }else{
-    map.setView(latlng,13);
-    $('locStatus').textContent='✅ Ubicación obtenida';
-    $('mapStatus').textContent='📍 Tu posición está marcada en el mapa.';
+    if($('useMyLocation'))$('useMyLocation').checked=false;
+    $('locStatus').textContent='✅ Ubicación encontrada, pero no corresponde a una isla configurada; no se usará como salida.';
+    $('mapStatus').textContent='📍 Tu posición aparece en el mapa. La ruta utilizará el punto de salida habitual.';
   }
 }
 function locationErrorMessage(error){
@@ -67,19 +71,50 @@ function locate(){
   };
   const finalError=(error)=>{
     const message=locationErrorMessage(error);
+    if($('useMyLocation'))$('useMyLocation').checked=false;
     $('locStatus').textContent='❌ '+message;
-    $('mapStatus').textContent='No se ha cambiado el punto de partida. Puedes volver a pulsar «Usar mi ubicación».';
+    $('mapStatus').textContent='No se ha cambiado el punto de partida. Puedes volver a buscar tu ubicación o continuar con la salida habitual.';
     console.warn('Geolocalización fallida:',{code:error?.code,message:error?.message});
   };
   navigator.geolocation.getCurrentPosition(showPosition,(error)=>failed(error,false),{
     enableHighAccuracy:true,timeout:15000,maximumAge:60000
   });
 }
+function setLocationStartChoice(){
+  const checkbox=$('useMyLocation');
+  if(!checkbox.checked){
+    if(pos){
+      $('locStatus').textContent='✅ Ubicación disponible, pero no se usará como punto de salida.';
+    }else{
+      $('locStatus').textContent='No se usará el GPS; la ruta empezará en el punto habitual de la zona.';
+    }
+    updateRegionUI();
+    $('mapStatus').textContent='La ruta utilizará el punto de salida habitual de la zona seleccionada.';
+    return;
+  }
+  if(!pos){
+    $('locStatus').textContent='⏳ Buscando tu ubicación para utilizarla como salida…';
+    locate();
+    return;
+  }
+  const detected=detectIsland(pos);
+  if(detected){
+    $('region').value=detected;
+    updateRegionUI();
+    $('locStatus').textContent=`✅ Se usará tu ubicación como salida · ${ISLANDS[detected].name}`;
+    $('mapStatus').textContent=`📍 La ruta comenzará desde tu ubicación en ${ISLANDS[detected].name}.`;
+  }else{
+    checkbox.checked=false;
+    $('locStatus').textContent='⚠️ Esta ubicación no está en una isla configurada. Se mantiene la salida habitual.';
+    $('mapStatus').textContent='El GPS no se utilizará como salida para esta ruta.';
+  }
+}
 $('loc').onclick=locate;
+$('useMyLocation').onchange=setLocationStartChoice;
 $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latitude,pos.longitude],14);else locate()};
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
-const APP_VERSION='v5.3';
+const APP_VERSION='v5.4';
 const VALHALLA_URL='/api/route';
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
@@ -275,8 +310,12 @@ function getStartAndTarget(){
   const island=ISLANDS[region];
   if(!island)return null;
   const detected=pos&&detectIsland(pos);
-  const start=detected===region?{lat:pos.latitude,lon:pos.longitude}:island.starts[0];
-  const label=detected===region?'tu ubicación':`${island.starts[0].name} (${island.name})`;
+  const useGps=$('useMyLocation')?.checked===true&&detected===region;
+  const start=useGps?{lat:pos.latitude,lon:pos.longitude}:island.starts[0];
+  const label=useGps?'tu ubicación':`${island.starts[0].name} (${island.name})`;
+  if($('useMyLocation')?.checked&&detected&&detected!==region){
+    $('locStatus').textContent=`Tu GPS está en ${ISLANDS[detected].name}; al elegir ${island.name} se utilizará ${island.starts[0].name} como salida.`;
+  }
   return {start,targets:islandWaypoints(region,start),label};
 }
 function updateRegionUI(){
@@ -291,7 +330,7 @@ function updateRegionUI(){
     const c=PENINSULA[$('peninsulaStart').value];
     map.setView([c.lat,c.lon],8);
   }else if(island){
-    const detected=pos&&detectIsland(pos);
+    const detected=$('useMyLocation')?.checked&&pos?detectIsland(pos):null;
     if(detected===region) map.setView([pos.latitude,pos.longitude],12);
     else map.setView([island.center.lat,island.center.lon],10);
     $('mapStatus').textContent=`${region==='mallorca'?'🏝️':'🏝️'} Ruta solo por ${island.name}.`;
