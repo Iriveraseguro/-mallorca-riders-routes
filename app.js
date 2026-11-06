@@ -844,6 +844,14 @@ function datexCoordinates(record){
       if(values.length>=2&&values.slice(0,2).every(Number.isFinite))add(values[0],values[1]);
     }
   }
+  if(!points.length){
+    for(const node of all.filter(item=>datexLocalName(item)==='poslist')){
+      const values=String(node.textContent||'').trim().split(/[ ,;]+/).map(Number);
+      for(let i=0;i+1<values.length;i+=2){
+        if(Number.isFinite(values[i])&&Number.isFinite(values[i+1]))add(values[i],values[i+1]);
+      }
+    }
+  }
   return points.map(({lat,lon})=>({lat,lon})).slice(0,24);
 }
 function parseDgtRoadworks(xmlText){
@@ -891,7 +899,7 @@ function matchRoadworksToRoute(incidents,shape){
     const matched=incident.coordinates.map(point=>{
       const projection=nearestRouteProgress({latitude:point.lat,longitude:point.lon},shape,cumulative);
       return {...point,distance:projection.distance,along:projection.along};
-    }).filter(point=>point.distance<=0.8).sort((a,b)=>a.along-b.along);
+    }).filter(point=>point.distance<=0.5).sort((a,b)=>a.along-b.along);
     if(!matched.length)return null;
     return {...incident,along:matched[0].along,routeCoordinates:matched.slice(0,12).map(point=>({lat:point.lat,lon:point.lon}))};
   }).filter(Boolean).sort((a,b)=>a.along-b.along);
@@ -1034,14 +1042,15 @@ async function acceptRoadworkDetour(){
     const result=await requestRoute(locations,plan,avoid);
     const stillNear=avoid.some(location=>{
       let minimum=Infinity;
-      for(let i=0;i<result.coords.length;i+=2){
+      for(let i=0;i<result.coords.length;i++){
         const point={lat:result.coords[i][0],lon:result.coords[i][1]};
         minimum=Math.min(minimum,distanceKm(point,location));
       }
       return minimum<0.08;
     });
     if(stillNear)throw new Error('El motor no ha podido confirmar que el nuevo trazado evite suficientemente la incidencia.');
-    const km=Math.round(result.summary.lengthKm),minutes=Math.round(result.summary.timeSec/60);
+    if(!Number.isFinite(result.summary?.distance)||!Number.isFinite(result.summary?.duration))throw new Error('El motor no ha devuelto distancia y duración verificables.');
+    const km=Math.round(result.summary.distance),minutes=Math.round(result.summary.duration/60);
     const duration=minutes>=60?Math.floor(minutes/60)+' h '+(minutes%60)+' min':minutes+' min';
     current={...current,shape:result.coords,km:km+' km',duration,routePoints:futurePoints.map(({name,lat,lon})=>({name,lat,lon})),realStop:null,realStops:[],poiError:null};
     navigationRoadworkHandled.add(incident.id);
