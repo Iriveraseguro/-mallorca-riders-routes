@@ -56,7 +56,7 @@ export default {
       return Response.json({
         status:"ok",
         workerHost:url.hostname,
-        build:"mrr-roadworks-2026-11-06-v4",
+        build:"mrr-roadworks-2026-11-06-v5",
         features:["dgt-roadworks","adaptive-decision-distance","voice-or-buttons","verified-valhalla-reroute"],
         trafficEndpoint:"/api/traffic/incidents",
         dgtResourceId:DGT_RESOURCE_ID
