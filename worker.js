@@ -49,6 +49,7 @@ export default {
         'nw["amenity"~"^(restaurant|fast_food)$"]',
         'nw["amenity"~"^(cafe|bar|pub)$"]',
         'nw["amenity"="fuel"]',
+        'node["highway"="speed_camera"]',
         'nw["tourism"="viewpoint"]'
       ]);
       const validClause = rawClause => {
