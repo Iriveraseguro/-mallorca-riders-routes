@@ -110,6 +110,27 @@ jobs:
           echo "DGT endpoint HTTP status: $STATUS"
           if [ "$STATUS" = "200" ] && grep -Eiq '<[^>]*(d2LogicalModel|situationPublication|SituationPublication)' "$BODY"; then
             echo "DGT feed probe: valid DATEX II XML received."
+            python3 - "$BODY" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          def local(tag):
+              return tag.rsplit("}", 1)[-1].split(":")[-1].lower()
+          records = [node for node in root.iter() if local(node.tag) == "situationrecord"]
+          types = set()
+          located = 0
+          for record in records:
+              for key, value in record.attrib.items():
+                  if local(key) == "type":
+                      types.add(value.split(":")[-1])
+              names = {local(node.tag) for node in record.iter()}
+              if "pointcoordinates" in names or "poslist" in names or "pos" in names:
+                  located += 1
+          print("DATEX root:", local(root.tag))
+          print("SituationRecord count:", len(records))
+          print("Records with coordinate geometry:", located)
+          print("SituationRecord types:", ", ".join(sorted(types)) or "(none in this feed)")
+          PY
           else
             echo "DGT feed probe: NOT VERIFIED. Response follows:"
             head -c 1200 "$BODY" || true
