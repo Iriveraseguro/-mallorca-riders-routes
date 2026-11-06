@@ -118,7 +118,7 @@ jobs:
               return tag.rsplit("}", 1)[-1].split(":")[-1].lower()
           records = [node for node in root.iter() if local(node.tag) == "situationrecord"]
           types, geometry_counts = set(), {"pointcoordinates":0,"latlon":0,"pos":0,"poslist":0}
-          located = work_candidates = work_with_geometry = 0
+          located = work_candidates = work_with_geometry = balearic_work_records = 0
           samples = []
           work_type = re.compile(r"roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure|generalobstruction", re.I)
           work_text = re.compile(r"\\b(obras?|trabajos de mantenimiento|corte(?:s)? de carretera|carretera cortada|calzada cortada|carril cortado|desvío|desvio)\\b|\\broadworks?\\b|\\broad closed\\b|\\blane closure\\b", re.I)
@@ -154,6 +154,8 @@ jobs:
               if is_work:
                   work_candidates += 1
                   if coordinates: work_with_geometry += 1
+                  if any(38.6 <= float(lat) <= 40.2 and 1.0 <= float(lon) <= 4.5 for lat,lon in coordinates):
+                      balearic_work_records += 1
                   if len(samples)<4:
                       samples.append({"type":kind,"coordinate_examples":coordinates[:2],"text":full_text[:240]})
           print("DATEX root:", local(root.tag))
@@ -162,6 +164,7 @@ jobs:
           print("Geometry element counts:", geometry_counts)
           print("Potential works/closures/descriptions:", work_candidates)
           print("Potential works with extractable coordinates:", work_with_geometry)
+          print("Potential works in Balearic bounding area:", balearic_work_records)
           print("SituationRecord types:", ", ".join(sorted(types)) or "(none in this feed)")
           print("Sample work records:", samples)
           PY
