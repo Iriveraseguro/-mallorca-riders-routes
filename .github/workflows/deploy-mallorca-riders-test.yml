@@ -87,7 +87,7 @@ jobs:
           done
           echo "$HEALTH"
           [[ "$HEALTH" == *'"status":"ok"'* ]]
-          [[ "$HEALTH" == *'"build":"mrr-roadworks-2026-11-06-v3"'* ]]
+          [[ "$HEALTH" == *'"build":"mrr-roadworks-2026-11-06-v4"'* ]]
           HTML="$(curl -fsS --max-time 20 "$BASE/")"
           [[ "$HTML" == *'app.js?v=76'* ]]
           APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=76")"
