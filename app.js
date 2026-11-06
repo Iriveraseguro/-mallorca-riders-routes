@@ -406,9 +406,18 @@ function buildRouteCandidates(plan){
       combos.push({trio,score:radialError+spreadPenalty*8});
     }
     combos.sort((a,b)=>a.score-b.score);
-    combos.slice(0,3).forEach((combo,index)=>add(combo.trio,`circular-${index+1}`));
+    if($('circle').checked){
+      // Para circuitos probamos ambos sentidos: horario y antihorario.
+      // No cambiamos el conjunto de candidatos de las rutas lineales.
+      combos.slice(0,3).forEach((combo,index)=>{
+        add(combo.trio,`circular-horario-${index+1}`);
+        add([...combo.trio].reverse(),`circular-antihorario-${index+1}`);
+      });
+    }else{
+      combos.slice(0,2).forEach((combo,index)=>add(combo.trio,`lineal-${index+1}`));
+    }
   }
-  return candidates.slice(0,3);
+  return candidates.slice(0,$('circle').checked?7:3);
 }
 function routeOverlapPenalty(coords){
   if(!Array.isArray(coords)||coords.length<30)return 0;
@@ -449,7 +458,8 @@ function routeOverlapPenalty(coords){
 function routeScore(result,plan){
   const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
-  const overlapPenalty=$('circle').checked?routeOverlapPenalty(result.coords)*1.25:0;
+  // En modo circular damos más peso a evitar tramos ya recorridos.
+  const overlapPenalty=$('circle').checked?routeOverlapPenalty(result.coords)*3:0;
   return kmError*0.78+timeError*0.22+overlapPenalty;
 }
 
@@ -734,10 +744,23 @@ async function generateRoute(){
       candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
       if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
       const result=await requestRoute(locations,candidate);
+      if($('circle').checked){
+        const first=result.coords[0],last=result.coords[result.coords.length-1];
+        const closureKm=distanceKm({lat:first[0],lon:first[1]},{lat:last[0],lon:last[1]});
+        // Valhalla puede ajustar el punto de entrada a la carretera, pero
+        // el inicio y el final de la geometría deben quedar prácticamente juntos.
+        if(closureKm>0.25)throw new Error('ROUTE_NOT_CLOSED');
+        const overlap=routeOverlapPenalty(result.coords);
+        if(overlap>0.34)throw new Error('ROUTE_TOO_MUCH_REUSE');
+      }
       return {result,candidate,score:routeScore(result,candidate)};
     }));
     const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
-    if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
+    if(!valid.length){
+      const rejected=settled.filter(x=>x.status==='rejected');
+      const circularFailure=rejected.find(x=>['ROUTE_NOT_CLOSED','ROUTE_TOO_MUCH_REUSE'].includes(String(x.reason?.message||'')));
+      throw(circularFailure?.reason||rejected[0]?.reason||new Error('SIN_RUTA'));
+    }
     valid.sort((a,b)=>a.score-b.score);
     const {result,candidate:chosen}=valid[0];
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
@@ -775,6 +798,8 @@ async function generateRoute(){
     const reason=String(e?.message||e||'ERROR_DESCONOCIDO');
     let msg;
     if(reason==='ROUTE_HAS_FERRY')msg='⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.';
+    else if(reason==='ROUTE_NOT_CLOSED')msg='⚠️ No he encontrado un circuito que cierre correctamente en el punto de salida. Prueba con más kilómetros o cambia el punto de inicio.';
+    else if(reason==='ROUTE_TOO_MUCH_REUSE')msg='⚠️ Las alternativas encontradas repiten demasiada carretera. No te mostraré una ruta así como circular; prueba con más kilómetros o cambia el tipo de ruta.';
     else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
     else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
     else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
