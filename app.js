@@ -378,11 +378,26 @@ function routePlan(){
   const durationHours=parseFloat($('duration').value||'3')||3;
   return {start:st.start,targets:st.targets,requestedKm:getRequestedKm(),requestedMinutes:durationHours*60,curves:Number($('curves').value)||3,type,label:st.label,region,manual:manualRouteActive};
 }
+function routeTargetSignature(targets){
+  return targets.map(p=>p.name||`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`).join('|');
+}
+function routeHistoryKey(plan){return `mrr-route-history:${plan.region}:${plan.type}`;}
+function readRouteHistory(plan){
+  try{return JSON.parse(localStorage.getItem(routeHistoryKey(plan))||'[]').filter(x=>typeof x==='string').slice(-8)}
+  catch(_){return []}
+}
+function rememberRouteChoice(plan,signature){
+  try{
+    const history=readRouteHistory(plan).filter(x=>x!==signature);
+    history.push(signature);
+    localStorage.setItem(routeHistoryKey(plan),JSON.stringify(history.slice(-8)));
+  }catch(error){console.warn('No se pudo guardar el historial de variedad',error)}
+}
 function buildRouteCandidates(plan){
   const candidates=[];
   const add=(targets,variant)=>{
     if(!targets?.length)return;
-    const signature=targets.map(p=>p.name||`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`).join('|');
+    const signature=routeTargetSignature(targets);
     if(candidates.some(c=>c.signature===signature))return;
     candidates.push({...plan,targets,signature,variant});
   };
@@ -406,9 +421,19 @@ function buildRouteCandidates(plan){
       combos.push({trio,score:radialError+spreadPenalty*8});
     }
     combos.sort((a,b)=>a.score-b.score);
-    combos.slice(0,3).forEach((combo,index)=>add(combo.trio,`circular-${index+1}`));
+    // Antes se elegían siempre las tres combinaciones mejor puntuadas.
+    // Ahora se explora un grupo más amplio y se evita repetir las usadas recientemente.
+    const recent=new Set(readRouteHistory(plan));
+    const top=combos.slice(0,Math.min(10,combos.length));
+    const unseen=top.filter(combo=>!recent.has(routeTargetSignature(combo.trio)));
+    const source=unseen.length>=3?unseen:top;
+    for(let i=source.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [source[i],source[j]]=[source[j],source[i]];
+    }
+    source.slice(0,3).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
   }
-  return candidates.slice(0,3);
+  return candidates.slice(0,4);
 }
 function routeOverlapPenalty(coords){
   if(!Array.isArray(coords)||coords.length<30)return 0;
@@ -451,6 +476,17 @@ function routeScore(result,plan){
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
   const overlapPenalty=$('circle').checked?routeOverlapPenalty(result.coords)*1.25:0;
   return kmError*0.78+timeError*0.22+overlapPenalty;
+}
+function chooseRouteCandidate(valid,plan){
+  if(valid.length===1)return valid[0];
+  const recent=new Set(readRouteHistory(plan));
+  const unseen=valid.filter(item=>!recent.has(item.candidate.signature));
+  const pool=unseen.length?unseen:valid;
+  pool.sort((a,b)=>a.score-b.score);
+  // Entre rutas de calidad parecida, variar el recorrido en vez de elegir siempre la primera.
+  const best=pool[0].score;
+  const close=pool.filter(item=>item.score<=best+0.06).slice(0,3);
+  return close[Math.floor(Math.random()*close.length)];
 }
 
 function decodePolyline6(str){
@@ -865,8 +901,9 @@ async function generateRoute(){
     }));
     const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
     if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
-    valid.sort((a,b)=>a.score-b.score);
-    const {result,candidate:chosen}=valid[0];
+    const selected=chooseRouteCandidate(valid,plan);
+    const {result,candidate:chosen}=selected;
+    rememberRouteChoice(plan,chosen.signature);
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(result.coords);
     if(!plan.manual){
