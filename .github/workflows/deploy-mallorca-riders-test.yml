@@ -82,20 +82,21 @@ jobs:
           HEALTH=""
           for attempt in 1 2 3 4 5; do
             HEALTH="$(curl -fsS --max-time 20 "$BASE/api/health" || true)"
-            if echo "$HEALTH" | grep -q '"workerHost":"mallorca-riders-proxy-test.i-riveraseguro.workers.dev"'; then break; fi
+            if [[ "$HEALTH" == *'"workerHost":"mallorca-riders-proxy-test.i-riveraseguro.workers.dev"'* ]]; then break; fi
             sleep 5
           done
           echo "$HEALTH"
-          echo "$HEALTH" | grep -q '"status":"ok"'
-          echo "$HEALTH" | grep -q '"build":"mrr-roadworks-2026-11-06-v2"'
+          [[ "$HEALTH" == *'"status":"ok"'* ]]
+          [[ "$HEALTH" == *'"build":"mrr-roadworks-2026-11-06-v2"'* ]]
           HTML="$(curl -fsS --max-time 20 "$BASE/")"
-          echo "$HTML" | grep -q 'app.js?v=76'
-          APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=75")"
-          echo "$APP" | grep -q 'function parseDgtRoadworks'
-          echo "$APP" | grep -q 'async function acceptRoadworkDetour'
+          [[ "$HTML" == *'app.js?v=76'* ]]
+          APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=76")"
+          [[ "$APP" == *'function parseDgtRoadworks'* ]]
+          [[ "$APP" == *'async function acceptRoadworkDetour'* ]]
+          [[ "$APP" == *'function roadworkWarningThresholds'* ]]
           SW="$(curl -fsS --max-time 20 "$BASE/sw.js")"
-          echo "$SW" | grep -q 'mrr-v18-adaptive-roadworks'
-          echo "Verified: test Worker, app.js v75, roadworks parser, detour handler and service-worker cache."
+          [[ "$SW" == *'mrr-v18-adaptive-roadworks'* ]]
+          echo "Verified: test Worker, app.js v76, adaptive roadworks alerts, reroute handler and service-worker cache."
 
       - name: Probe live DGT traffic feed
         if: steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' || steps.deploy3.outcome == 'success'
