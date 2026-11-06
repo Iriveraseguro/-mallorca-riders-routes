@@ -77,7 +77,7 @@ jobs:
         if: steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' || steps.deploy3.outcome == 'success'
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           BASE="https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev"
           HEALTH=""
           for attempt in 1 2 3 4 5; do
@@ -100,7 +100,7 @@ jobs:
           [[ "$APP" == *"const grouped=[]"* ]]
           SW="$(curl -fsS --max-time 20 "$BASE/sw.js")"
           [[ "$SW" == *'mrr-v21-roadworks-dedupe'* ]]
-          echo "Verified: test Worker, app.js v76, adaptive roadworks alerts, reroute handler and service-worker cache."
+          echo "Verified: test Worker, app.js v79, adaptive roadworks alerts, reroute handler and service-worker cache."
 
       - name: Probe live DGT traffic feed
         if: steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' || steps.deploy3.outcome == 'success'
