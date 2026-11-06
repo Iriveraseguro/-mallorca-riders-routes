@@ -159,7 +159,8 @@ jobs:
                       balearic_work_records += 1
                       if len(balearic_samples)<8:
                           time_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if "time" in local(node.tag) and (node.text or "").strip()]
-                          balearic_samples.append({"type":kind,"coordinates":coordinates[:3],"times":time_fields[:12],"text":full_text[:260]})
+                          status_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if ("status" in local(node.tag) or "validity" in local(node.tag)) and (node.text or "").strip()]
+                          balearic_samples.append({"type":kind,"coordinates":coordinates[:3],"times":time_fields[:12],"status":status_fields[:12],"text":full_text[:260]})
                   if len(samples)<4:
                       time_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if "time" in local(node.tag) and (node.text or "").strip()]
                       samples.append({"type":kind,"coordinate_examples":coordinates[:2],"times":time_fields[:8],"text":full_text[:240]})
