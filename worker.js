@@ -1,4 +1,8 @@
 const GOOGLE_HOSTS = new Set(["maps.app.goo.gl","goo.gl","www.google.com","google.com","maps.google.com"]);
+const DGT_RESOURCE_ID = "1d36ea74-593d-4e45-acfa-fb8db5a460bc";
+const DGT_DOWNLOAD_URL = "https://nap.dgt.es/dataset/77be854a-6911-47dc-ba4c-b13067a50552/resource/1d36ea74-593d-4e45-acfa-fb8db5a460bc/download/datex2_v37.xml";
+let cachedDgtFeed = null;
+let cachedDgtFeedAt = 0;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -34,6 +38,69 @@ export default {
       } catch (error) {
         return Response.json({error:"No se pudo conectar con el motor de rutas.",detail:String(error?.message||error).slice(0,250)},{status:502,headers});
       }
+    }
+    if (url.pathname === "/api/traffic/incidents") {
+      const headers = {
+        "Access-Control-Allow-Origin": url.origin,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Accept",
+        "Cache-Control": "no-store",
+        "Vary": "Origin"
+      };
+      if (request.method === "OPTIONS") return new Response(null,{status:204,headers});
+      if (request.method !== "GET") return Response.json({error:"Método no permitido."},{status:405,headers});
+      if (cachedDgtFeed && Date.now() - cachedDgtFeedAt < 45000) {
+        return new Response(cachedDgtFeed,{status:200,headers:{...headers,"Content-Type":"application/xml; charset=utf-8","X-Traffic-Source":"DGT-NAP","X-Traffic-Cache":"HIT"}});
+      }
+      const sources = [];
+      try {
+        const metadataResponse = await fetch("https://nap.dgt.es/api/3/action/resource_show?id="+DGT_RESOURCE_ID,{
+          headers:{"Accept":"application/json","User-Agent":"MallorcaRidersRoutes/1.0"}
+        });
+        if (metadataResponse.ok) {
+          const metadata = await metadataResponse.json();
+          const candidate = metadata?.result?.url;
+          if (metadata?.success && candidate) {
+            const parsed = new URL(candidate);
+            if (parsed.protocol === "https:" && parsed.hostname === "nap.dgt.es") sources.push(parsed.href);
+          }
+        }
+      } catch (error) {
+        console.warn("No se pudo resolver el recurso DATEX II del NAP:",String(error?.message||error));
+      }
+      sources.push(DGT_DOWNLOAD_URL);
+      const failures = [];
+      for (const source of [...new Set(sources)]) {
+        const controller = new AbortController();
+        const timer = setTimeout(()=>controller.abort(),18000);
+        try {
+          const upstream = await fetch(source,{
+            headers:{
+              "Accept":"application/xml, text/xml;q=0.9, */*;q=0.5",
+              "User-Agent":"MallorcaRidersRoutes/1.0 (+https://github.com/Iriveraseguro/-mallorca-riders-routes)"
+            },
+            redirect:"follow",
+            signal:controller.signal
+          });
+          if (!upstream.ok) throw new Error("NAP respondió HTTP "+upstream.status);
+          const xml = await upstream.text();
+          if (!xml || xml.length > 6000000 || !/<\s*(?:[\w.-]+:)?(?:d2LogicalModel|situationPublication|SituationPublication)\b/i.test(xml)) {
+            throw new Error("El recurso del NAP no devolvió un XML DATEX II válido.");
+          }
+          cachedDgtFeed = xml;
+          cachedDgtFeedAt = Date.now();
+          return new Response(xml,{status:200,headers:{...headers,"Content-Type":"application/xml; charset=utf-8","X-Traffic-Source":"DGT-NAP","X-Traffic-Cache":"MISS"}});
+        } catch (error) {
+          failures.push(String(error?.message||error).slice(0,180));
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      return Response.json({
+        error:"No se ha podido consultar el feed oficial de incidencias de la DGT.",
+        detail:failures.join(" | ").slice(0,500),
+        source:"DGT NAP DATEX II v3.7"
+      },{status:502,headers});
     }
     if (url.pathname === "/api/overpass") {
       const headers = {"Cache-Control":"no-store"};
