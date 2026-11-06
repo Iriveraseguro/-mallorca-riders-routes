@@ -822,7 +822,8 @@ async function reverseCurrentRoute(){
     const samples=[];for(let d=7;d<total-1;d+=7)samples.push(sampleAt(d));
     const reversed=[{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]},...samples.reverse(),{lat:shape[0][0],lon:shape[0][1]}];
     const compact=reversed.filter((p,i)=>i===0||i===reversed.length-1||distanceKm(reversed[i-1],p)>0.5);
-    const plan={region:current.region||$('region').value,type:current.type||'Mixta'};
+    const detectedRegion=detectIsland({latitude:shape[0][0],longitude:shape[0][1]});
+    const plan={region:detectedRegion||'peninsula',type:current.type||'Mixta'};
     const result=await requestRoute(compact.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[plan.region]?{exclude_ferry:true}:{}})),plan);
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     current={...current,shape:result.coords,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:(current.routePoints||[]).slice().reverse(),direction:current.direction==='inversa'?'normal':'inversa',realStops:current.realStops||[]};
@@ -1040,6 +1041,7 @@ async function copySharedRouteLink(){
 function drawSharedRoute(route){
   if(!map||!Array.isArray(route?.shape)||route.shape.length<2)return;
   clearRoute();
+  findSpeedCameras(route.shape).then(cameras=>{if(current?.shape===route.shape){navigationCameras=cameras;drawSafetyCameras(cameras);render(current)}});
   routeLine=L.polyline(route.shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(route.shape);
   (route.routePoints||[]).forEach((p,i)=>{
     const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));
