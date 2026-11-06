@@ -937,6 +937,15 @@ function refreshRoadworksForRoute(){
       console.warn('No se pudieron actualizar las incidencias DGT',error);
     });
 }
+function roadworkWarningThresholds(incident,progressAlong){
+  const nextManeuver=navigationCues
+    .filter(cue=>cue.distance>progressAlong+0.12&&cue.distance<incident.along)
+    .sort((a,b)=>a.distance-b.distance)[0];
+  if(!nextManeuver)return {first:5000,decision:3000,early:false};
+  const maneuverRemaining=Math.max(0,(nextManeuver.distance-progressAlong)*1000);
+  const decision=Math.min(12000,Math.max(3000,maneuverRemaining+800));
+  return {first:Math.max(5000,decision+1500),decision,early:decision>3000};
+}
 function checkRoadworksForProgress(position,progress){
   if(!position||!progress||!navigationRoadworks.length)return;
   for(const incident of navigationRoadworks){
@@ -948,17 +957,24 @@ function checkRoadworksForProgress(position,progress){
       continue;
     }
     if(remaining<=0)continue;
+    const thresholds=roadworkWarningThresholds(incident,progress.along);
     const state=navigationRoadworkAlerts.get(incident.id)||{five:false,three:false};
-    if(remaining<=5000&&!state.five){
+    if(remaining<=thresholds.first&&!state.five){
       state.five=true;
-      speakNavigation('Atención. La DGT comunica obras o una restricción en la ruta dentro de unos cinco kilómetros. Te avisaré de nuevo antes de llegar.');
-      navigationRoadworksStatus='⚠️ Incidencia DGT aproximándose: '+(incident.description||'obras o restricción')+'. Primer aviso a unos 5 km.';
+      const km=(remaining/1000).toFixed(1).replace('.',',');
+      const detail=thresholds.early?' Hay una maniobra de la ruta antes de las obras, por eso te aviso con más antelación.':'';
+      if(!pendingRoadworkIncident||pendingRoadworkIncident.id!==incident.id)
+        speakNavigation('Atención. La DGT comunica obras o una restricción dentro de unos '+km+' kilómetros.'+detail+' Te avisaré antes del punto de decisión.');
+      navigationRoadworksStatus='⚠️ Incidencia DGT aproximándose: '+(incident.description||'obras o restricción')+'. Primer aviso a unos '+km+' km.';
       updateRoadworksUI();
     }
-    if(remaining<=3000&&!state.three){
-      state.three=true;
-      incident.displayRemaining=remaining;
-      if(!pendingRoadworkIncident||pendingRoadworkIncident.id===incident.id)showRoadworkDecision(incident);
+    if(remaining<=thresholds.decision&&!state.three){
+      if(!pendingRoadworkIncident){
+        state.three=true;
+        incident.displayRemaining=remaining;
+        incident.decisionDistance=thresholds.decision;
+        showRoadworkDecision(incident);
+      }
     }else if(pendingRoadworkIncident?.id===incident.id){
       incident.displayRemaining=remaining;
       updateRoadworksUI();
@@ -968,9 +984,11 @@ function checkRoadworksForProgress(position,progress){
 }
 function showRoadworkDecision(incident){
   pendingRoadworkIncident=incident;
-  navigationRoadworksStatus='⚠️ Necesitas decidir antes de llegar a la incidencia. La ruta original no se modificará sin tu aceptación.';
+  const km=Math.max(0,(incident.displayRemaining||3000)/1000).toFixed(1).replace('.',',');
+  const early=(incident.decisionDistance||3000)>3000?' antes de la próxima maniobra':'';
+  navigationRoadworksStatus='⚠️ Necesitas decidir'+early+' y antes de llegar a la incidencia. La ruta original no se modificará sin tu aceptación.';
   updateRoadworksUI();
-  speakNavigation('En unos tres kilómetros hay obras o una restricción. Di si quieres cambiar de ruta usando el botón de voz, o pulsa aceptar desvío o continuar por la ruta original.');
+  speakNavigation('Incidencia a unos '+km+' kilómetros.'+early+'. Di cambia de ruta o continúa, o pulsa el botón correspondiente.');
 }
 function continueOriginalRoute(){
   if(!pendingRoadworkIncident)return;
@@ -1079,7 +1097,7 @@ async function startVoiceNavigation(){
   if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
   if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
   stopVoiceNavigation();
-  navigationRoadworks=[];navigationRoadworkAlerts.clear();pendingRoadworkIncident=null;
+  navigationRoadworks=[];navigationRoadworkAlerts.clear();navigationRoadworkHandled.clear();pendingRoadworkIncident=null;
   navigationRoadworksStatus='Consultando las incidencias oficiales de la DGT para esta ruta…';
   updateRoadworksUI();
   const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();
