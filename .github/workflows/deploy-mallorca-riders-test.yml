@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/poi-arrows-overpass-repair-20261030
+      - feature/voz-radares-ruta-inversa
   workflow_dispatch:
 
 permissions:
