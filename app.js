@@ -301,11 +301,36 @@ function distanceKm(a,b){
   return 2*R*Math.asin(Math.sqrt(x));
 }
 
+function peninsulaCircularWaypoints(city,start,requestedKm,routeType){
+  const reference=city.targets[routeType]||city.targets.Mixta;
+  const target={lat:Number(reference[0]),lon:Number(reference[1])};
+  const p1=start.lat*Math.PI/180,p2=target.lat*Math.PI/180;
+  const dLon=(target.lon-start.lon)*Math.PI/180;
+  const preferredBearing=(Math.atan2(
+    Math.sin(dLon)*Math.cos(p2),
+    Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dLon)
+  )*180/Math.PI+360)%360;
+  const radius=Math.max(9,Math.min(Number(requestedKm||120)*0.18,30));
+  // Tres puntos en un arco amplio fuerzan un circuito por carreteras distintas,
+  // en lugar de ir a un único destino y volver por el mismo corredor.
+  return [
+    {bearing:(preferredBearing-48+360)%360,distance:radius*0.72},
+    {bearing:preferredBearing,distance:radius},
+    {bearing:(preferredBearing+48)%360,distance:radius*0.72}
+  ].sort((a,b)=>a.bearing-b.bearing).map((point,index)=>{
+    const location=destinationPoint(start.lat,start.lon,point.distance,point.bearing);
+    return {...location,name:'Punto circular '+(index+1)};
+  });
+}
 function getStartAndTarget(){
   const region=$('region').value;
   if(region==='peninsula'){
     const city=PENINSULA[$('peninsulaStart').value];
-    return {start:{lat:city.lat,lon:city.lon},targets:[{name:city.name,lat:city.targets[type][0],lon:city.targets[type][1]}],label:city.name};
+    const start={lat:city.lat,lon:city.lon};
+    const targets=$('circle')?.checked
+      ? peninsulaCircularWaypoints(city,start,getRequestedKm(),type)
+      : [{name:city.name,lat:city.targets[type][0],lon:city.targets[type][1]}];
+    return {start,targets,label:city.name};
   }
   const island=ISLANDS[region];
   if(!island)return null;
@@ -510,11 +535,32 @@ function routeOverlapPenalty(coords){
   }
   return duplicate/Math.max(samples.length,1);
 }
-function routeScore(result,plan){
+function circularRouteMetrics(coords,start){
+  if(!Array.isArray(coords)||coords.length<10||!start)return {valid:false,reason:'geometría insuficiente'};
+  const first=coords[0],last=coords[coords.length-1];
+  const firstPoint={lat:Number(first[0]),lon:Number(first[1])};
+  const lastPoint={lat:Number(last[0]),lon:Number(last[1])};
+  const startGapKm=distanceKm(start,firstPoint);
+  const finishGapKm=distanceKm(start,lastPoint);
+  const closureGapKm=distanceKm(firstPoint,lastPoint);
+  const overlapRatio=routeOverlapPenalty(coords);
+  let totalKm=0;
+  for(let i=1;i<coords.length;i++){
+    totalKm+=distanceKm({lat:coords[i-1][0],lon:coords[i-1][1]},{lat:coords[i][0],lon:coords[i][1]});
+  }
+  // Valhalla ajusta el punto solicitado a la carretera más próxima.
+  // Admitimos ese pequeño ajuste, pero no una llegada a otra zona ni un regreso
+  // que reutilice casi todo el camino de ida.
+  const valid=startGapKm<=1.0&&finishGapKm<=1.0&&closureGapKm<=0.8&&overlapRatio<=0.58&&totalKm>=8;
+  return {valid,startGapKm,finishGapKm,closureGapKm,overlapRatio,totalKm};
+}
+function routeScore(result,plan,loopMetrics=null){
   const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
-  const overlapPenalty=$('circle').checked?routeOverlapPenalty(result.coords)*1.25:0;
-  return kmError*0.78+timeError*0.22+overlapPenalty;
+  const overlapRatio=loopMetrics?.overlapRatio??routeOverlapPenalty(result.coords);
+  const overlapPenalty=$('circle').checked?overlapRatio*2.8:0;
+  const closurePenalty=$('circle').checked&&loopMetrics?loopMetrics.closureGapKm*2:0;
+  return kmError*0.78+timeError*0.22+overlapPenalty+closurePenalty;
 }
 function chooseRouteCandidate(valid,plan){
   if(valid.length===1)return valid[0];
@@ -1282,7 +1328,9 @@ async function generateRoute(){
       candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
       if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
       const result=await requestRoute(locations,candidate);
-      return {result,candidate,score:routeScore(result,candidate)};
+      const loopMetrics=$('circle').checked?circularRouteMetrics(result.coords,candidate.start):null;
+      if(loopMetrics&&!loopMetrics.valid)throw new Error('ROUTE_NOT_CIRCULAR');
+      return {result,candidate,score:routeScore(result,candidate,loopMetrics),loopMetrics};
     }));
     const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
     if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
@@ -1316,10 +1364,10 @@ async function generateRoute(){
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
     navigationCameras=await findSpeedCameras(result.coords);drawSafetyCameras(navigationCameras);
-     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,circularMetrics:selected.loopMetrics||null};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
-    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
+    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${current.circular?' · 🔄 Circuito cerrado comprobado':''}${poiStatus}`;
   }catch(e){
     console.error('Error al generar ruta:',e);
     const reason=String(e?.message||e||'ERROR_DESCONOCIDO');
@@ -1327,6 +1375,7 @@ async function generateRoute(){
     if(reason==='ROUTE_HAS_FERRY')msg='⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.';
     else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
     else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
+    else if(reason==='ROUTE_NOT_CIRCULAR')msg='⚠️ No he encontrado un circuito cerrado fiable que vuelva al punto de salida sin repetir demasiado el mismo tramo. Prueba otra distancia o tipo de ruta.';
     else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
     else if(reason==='NETWORK')msg='⚠️ No hay conexión con el servidor de rutas.';
     else if(reason.startsWith('HTTP_'))msg=`⚠️ El servidor de rutas ha rechazado la petición (${reason.slice(0,100)}).`;
@@ -1372,7 +1421,7 @@ function render(r){
     '<div id="roadworkStatus" class="stop" role="status">'+escapeHtml(navigationRoadworksStatus)+'</div>'+
     '<div id="roadworkDecision" class="warning roadwork-decision" hidden><b>⚠️ Incidencia en la ruta</b><p id="roadworkMessage" class="note"></p><div class="actions"><button class="secondary" id="acceptRoadworkDetour" onclick="acceptRoadworkDetour()">✅ Aceptar desvío</button><button class="secondary" onclick="continueOriginalRoute()">➡️ Continuar por la ruta original</button><button class="secondary" onclick="startRoadworkVoiceChoice()">🎙️ Responder por voz</button></div></div>'+
     '<div class="stop">'+(r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.'))))+'</div>'+
-    '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div>'+
+    '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.'+(r.circular?'<br>🔄 Circuito cerrado: termina en el mismo punto de salida.':'')+'</div>'+
     '<div class="actions">'+sharedActions+
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
