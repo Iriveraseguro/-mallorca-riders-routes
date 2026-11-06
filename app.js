@@ -409,7 +409,7 @@ function buildRouteCandidates(plan){
     if($('circle').checked){
       // Para circuitos probamos ambos sentidos: horario y antihorario.
       // No cambiamos el conjunto de candidatos de las rutas lineales.
-      combos.slice(0,3).forEach((combo,index)=>{
+      combos.slice(0,2).forEach((combo,index)=>{
         add(combo.trio,`circular-horario-${index+1}`);
         add([...combo.trio].reverse(),`circular-antihorario-${index+1}`);
       });
@@ -417,7 +417,7 @@ function buildRouteCandidates(plan){
       combos.slice(0,2).forEach((combo,index)=>add(combo.trio,`lineal-${index+1}`));
     }
   }
-  return candidates.slice(0,$('circle').checked?7:3);
+  return candidates.slice(0,$('circle').checked?5:3);
 }
 function routeOverlapPenalty(coords){
   if(!Array.isArray(coords)||coords.length<30)return 0;
