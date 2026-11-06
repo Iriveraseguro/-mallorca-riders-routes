@@ -867,7 +867,7 @@ function parseDgtRoadworks(xmlText){
   for(const record of fallback){
     const type=Array.from(record.attributes||[]).find(attr=>attr.name.toLowerCase().endsWith(':type'))?.value||record.getAttribute('type')||record.nodeName;
     const plainText=String(record.textContent||'').replace(/\s+/g,' ').trim();
-    const typeIsWork=/roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure|generalobstruction/i.test(type);
+    const typeIsWork=/roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure/i.test(type);
     const textIsWork=/\b(obras?|trabajos de mantenimiento|corte(?:s)? de carretera|carretera cortada|calzada cortada|carril cortado|desvío|desvio)\b|\broadworks?\b|\broad closed\b|\blane closure\b/i.test(plainText);
     if(!typeIsWork&&!textIsWork)continue;
     const coordinates=datexCoordinates(record);
