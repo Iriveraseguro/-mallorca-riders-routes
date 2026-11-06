@@ -114,6 +114,7 @@ jobs:
             echo "DGT feed probe: valid DATEX II XML received."
             python3 - "$BODY" <<'PY'
           import re, sys
+          from datetime import datetime, timezone
           import xml.etree.ElementTree as ET
           root = ET.parse(sys.argv[1]).getroot()
           def local(tag):
@@ -121,6 +122,8 @@ jobs:
           records = [node for node in root.iter() if local(node.tag) == "situationrecord"]
           types, geometry_counts = set(), {"pointcoordinates":0,"latlon":0,"pos":0,"poslist":0}
           located = work_candidates = work_with_geometry = balearic_work_records = 0
+          current_work_records = current_balearic_work_records = 0
+          now = datetime.now(timezone.utc)
           samples, balearic_samples = [], []
           work_type = re.compile(r"roadworks?|maintenancework|roadclosure|carriagewayclosure|laneclosure", re.I)
           work_text = re.compile(r"\b(obras?|trabajos de mantenimiento|corte(?:s)? de carretera|carretera cortada|calzada cortada|carril cortado|desvío|desvio)\b|\broadworks?\b|\broad closed\b|\blane closure\b", re.I)
@@ -156,13 +159,23 @@ jobs:
               if is_work:
                   work_candidates += 1
                   if coordinates: work_with_geometry += 1
+                  status_values=[(node.text or "").strip().lower() for node in nodes if local(node.tag)=="validitystatus" and (node.text or "").strip()]
+                  starts=[(node.text or "").strip() for node in nodes if local(node.tag) in ("overallstarttime","validitystarttime","starttime") and (node.text or "").strip()]
+                  ends=[(node.text or "").strip() for node in nodes if local(node.tag) in ("overallendtime","endofperiod","validityendtime") and (node.text or "").strip()]
+                  parse_date=lambda value: datetime.fromisoformat(value.replace("Z","+00:00"))
+                  start_date=next((parse_date(value) for value in starts if value),None)
+                  end_date=next((parse_date(value) for value in ends if value),None)
+                  is_current=(not status_values or "active" in status_values) and (start_date is None or start_date<=now) and (end_date is None or end_date>=now)
                   is_balearic = any(38.6 <= float(lat) <= 40.2 and 1.0 <= float(lon) <= 4.5 for lat,lon in coordinates)
+                  if is_current:
+                      current_work_records += 1
+                      if is_balearic: current_balearic_work_records += 1
                   if is_balearic:
                       balearic_work_records += 1
                       if len(balearic_samples)<8:
                           time_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if "time" in local(node.tag) and (node.text or "").strip()]
                           status_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if ("status" in local(node.tag) or "validity" in local(node.tag)) and (node.text or "").strip()]
-                          balearic_samples.append({"type":kind,"coordinates":coordinates[:3],"times":time_fields[:12],"status":status_fields[:12],"text":full_text[:260]})
+                          balearic_samples.append({"type":kind,"coordinates":coordinates[:3],"times":time_fields[:12],"status":status_fields[:12],"current":is_current,"text":full_text[:260]})
                   if len(samples)<4:
                       time_fields=[(local(node.tag), (node.text or "").strip()) for node in nodes if "time" in local(node.tag) and (node.text or "").strip()]
                       samples.append({"type":kind,"coordinate_examples":coordinates[:2],"times":time_fields[:8],"text":full_text[:240]})
@@ -173,6 +186,8 @@ jobs:
           print("Potential works/closures/descriptions:", work_candidates)
           print("Potential works with extractable coordinates:", work_with_geometry)
           print("Potential works in Balearic bounding area:", balearic_work_records)
+          print("Currently active/in-period works (same status and date filters as app):", current_work_records)
+          print("Currently active/in-period works in Balearic bounding area:", current_balearic_work_records)
           print("SituationRecord types:", ", ".join(sorted(types)) or "(none in this feed)")
           print("Sample work records:", samples)
           print("Sample Balearic work records with date/time fields:", balearic_samples)
