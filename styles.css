@@ -41,3 +41,13 @@
 }
 
 .safety-camera-marker{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#f59e0b;border:2px solid #fff;box-shadow:0 2px 8px #0009;font-size:18px}.route-direction-arrow{color:#1683ff}
+
+
+/* Avisos de obras y decisión de desvío durante la navegación. */
+.roadwork-decision{border:1px solid #d97706;background:#30230f;margin:12px 0;padding:14px;border-radius:12px}
+.roadwork-decision .note{color:#f1d6a5;line-height:1.5;margin:8px 0 12px}
+.roadwork-decision .actions{grid-template-columns:1fr 1fr;gap:8px}
+.roadwork-decision button{white-space:normal;min-height:44px}
+#roadworkStatus{line-height:1.5}
+[hidden]{display:none!important}
+@media(max-width:480px){.roadwork-decision .actions{grid-template-columns:1fr}}
