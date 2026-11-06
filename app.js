@@ -485,19 +485,27 @@ function buildRouteCandidates(plan){
       combos.push({trio,score:radialError+spreadPenalty*8});
     }
     combos.sort((a,b)=>a.score-b.score);
-    // Antes se elegían siempre las tres combinaciones mejor puntuadas.
-    // Ahora se explora un grupo más amplio y se evita repetir las usadas recientemente.
-    const recent=new Set(readRouteHistory(plan));
-    const top=combos.slice(0,Math.min(10,combos.length));
-    const unseen=top.filter(combo=>!recent.has(routeTargetSignature(combo.trio)));
-    const source=unseen.length>=3?unseen:top;
-    for(let i=source.length-1;i>0;i--){
-      const j=Math.floor(Math.random()*(i+1));
-      [source[i],source[j]]=[source[j],source[i]];
+    if($('circle').checked){
+      // En circular se prueban dos combinaciones en ambos sentidos de paso.
+      // La selección final se hará por calidad del circuito, no al azar.
+      combos.slice(0,2).forEach((combo,index)=>{
+        add(combo.trio,`circular-horario-${index+1}`);
+        add([...combo.trio].reverse(),`circular-antihorario-${index+1}`);
+      });
+    }else{
+      // Mantener la variedad aleatoria existente para rutas no circulares.
+      const recent=new Set(readRouteHistory(plan));
+      const top=combos.slice(0,Math.min(10,combos.length));
+      const unseen=top.filter(combo=>!recent.has(routeTargetSignature(combo.trio)));
+      const source=unseen.length>=3?unseen:top;
+      for(let i=source.length-1;i>0;i--){
+        const j=Math.floor(Math.random()*(i+1));
+        [source[i],source[j]]=[source[j],source[i]];
+      }
+      source.slice(0,2).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
     }
-    source.slice(0,2).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
   }
-  return candidates.slice(0,3);
+  return candidates.slice(0,$('circle').checked?5:3);
 }
 function routeOverlapPenalty(coords){
   if(!Array.isArray(coords)||coords.length<30)return 0;
@@ -551,19 +559,24 @@ function circularRouteMetrics(coords,start){
   // Valhalla ajusta el punto solicitado a la carretera más próxima.
   // Admitimos ese pequeño ajuste, pero no una llegada a otra zona ni un regreso
   // que reutilice casi todo el camino de ida.
-  const valid=startGapKm<=1.0&&finishGapKm<=1.0&&closureGapKm<=0.8&&overlapRatio<=0.58&&totalKm>=8;
+  // La llegada debe quedar cerca del mismo punto y el trazado no puede
+  // reutilizar una parte importante del recorrido de ida.
+  const valid=startGapKm<=0.7&&finishGapKm<=0.7&&closureGapKm<=0.4&&overlapRatio<=0.34&&totalKm>=8;
   return {valid,startGapKm,finishGapKm,closureGapKm,overlapRatio,totalKm};
 }
 function routeScore(result,plan,loopMetrics=null){
   const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
   const overlapRatio=loopMetrics?.overlapRatio??routeOverlapPenalty(result.coords);
-  const overlapPenalty=$('circle').checked?overlapRatio*2.8:0;
+  const overlapPenalty=$('circle').checked?overlapRatio*4.5:0;
   const closurePenalty=$('circle').checked&&loopMetrics?loopMetrics.closureGapKm*2:0;
   return kmError*0.78+timeError*0.22+overlapPenalty+closurePenalty;
 }
 function chooseRouteCandidate(valid,plan){
   if(valid.length===1)return valid[0];
+  // En modo circular priorizamos siempre el circuito con menos repetición
+  // y mejor ajuste, sin escoger al azar una alternativa inferior.
+  if($('circle').checked)return [...valid].sort((a,b)=>a.score-b.score)[0];
   const recent=new Set(readRouteHistory(plan));
   const unseen=valid.filter(item=>!recent.has(item.candidate.signature));
   const pool=unseen.length?unseen:valid;
@@ -1333,7 +1346,11 @@ async function generateRoute(){
       return {result,candidate,score:routeScore(result,candidate,loopMetrics),loopMetrics};
     }));
     const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
-    if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
+    if(!valid.length){
+      const rejected=settled.filter(x=>x.status==='rejected');
+      const circularFailure=rejected.find(x=>String(x.reason?.message||'')==='ROUTE_NOT_CIRCULAR');
+      throw(circularFailure?.reason||rejected[0]?.reason||new Error('SIN_RUTA'));
+    }
     const selected=chooseRouteCandidate(valid,plan);
     const {result,candidate:chosen}=selected;
     rememberRouteChoice(plan,chosen.signature);
