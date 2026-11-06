@@ -879,14 +879,29 @@ function parseDgtRoadworks(xmlText){
       const name=datexLocalName(node),value=String(node.textContent||'').replace(/\s+/g,' ').trim();
       if(usefulNames.has(name)&&value&&value.length<180&&!descriptionParts.includes(value))descriptionParts.push(value);
     }
+    const statusNodes=descendants.filter(node=>datexLocalName(node)==='validitystatus');
+    const statusValues=statusNodes.map(node=>String(node.textContent||'').trim().toLowerCase()).filter(Boolean);
+    if(statusValues.length&&!statusValues.some(value=>value==='active'))continue;
+    const startNodes=descendants.filter(node=>['overallstarttime','validitystarttime','starttime'].includes(datexLocalName(node)));
+    const startDate=startNodes.map(node=>Date.parse(node.textContent||'')).find(Number.isFinite);
+    if(Number.isFinite(startDate)&&startDate>Date.now())continue;
     const endNodes=descendants.filter(node=>['overallendtime','endofperiod','validityendtime'].includes(datexLocalName(node)));
     const endDate=endNodes.map(node=>Date.parse(node.textContent||'')).find(Number.isFinite);
     if(Number.isFinite(endDate)&&endDate<Date.now())continue;
+    const textForDescription=type+' '+plainText;
+    let description=descriptionParts.join(' · ');
+    if(!description){
+      if(/roadworks?|roadmaintenance|maintenancework/i.test(textForDescription))description='Obras de mantenimiento';
+      else if(/roadclosed|carriagewayclosed|laneclosed|road closure|lane closure/i.test(textForDescription))description='Corte o cierre de carretera';
+      else description='Obras o restricción en la vía';
+    }
+    const roadName=descendants.find(node=>['roadnumber','roadname'].includes(datexLocalName(node))&&String(node.textContent||'').trim());
+    if(roadName)description+=' · '+String(roadName.textContent||'').trim();
     const id=record.getAttribute('id')||type+':'+coordinates.map(p=>p.lat.toFixed(4)+','+p.lon.toFixed(4)).join(';');
     results.push({
       id:String(id),
       type:String(type).split(':').pop(),
-      description:(descriptionParts.join(' · ')||String(type).split(':').pop()||'Obras o restricción de tráfico').slice(0,220),
+      description:description.slice(0,220),
       coordinates
     });
   }
@@ -1028,6 +1043,23 @@ function startRoadworkVoiceChoice(){
     alert('No se ha podido iniciar el reconocimiento de voz. Usa los botones de la pantalla.');
   }
 }
+
+function roadworkAvoidPoints(points,maxPoints=12){
+  const valid=(points||[]).filter(point=>Number.isFinite(Number(point.lat))&&Number.isFinite(Number(point.lon)));
+  if(valid.length<2)return valid.slice(0,maxPoints).map(point=>({lat:Number(point.lat),lon:Number(point.lon)}));
+  const dense=[{lat:Number(valid[0].lat),lon:Number(valid[0].lon)}];
+  for(let i=1;i<valid.length;i++){
+    const from={lat:Number(valid[i-1].lat),lon:Number(valid[i-1].lon)};
+    const to={lat:Number(valid[i].lat),lon:Number(valid[i].lon)};
+    const steps=Math.max(1,Math.ceil(distanceKm(from,to)/0.12));
+    for(let step=1;step<=steps;step++){
+      const t=step/steps;
+      dense.push({lat:from.lat+(to.lat-from.lat)*t,lon:from.lon+(to.lon-from.lon)*t});
+    }
+  }
+  if(dense.length<=maxPoints)return dense;
+  return Array.from({length:maxPoints},(_,index)=>dense[Math.round(index*(dense.length-1)/(maxPoints-1))]);
+}
 async function acceptRoadworkDetour(){
   const incident=pendingRoadworkIncident;
   if(!incident||!current?.shape?.length)return;
@@ -1055,7 +1087,7 @@ async function acceptRoadworkDetour(){
     const rawLocations=[startPoint,...futurePoints.map(point=>({lat:Number(point.lat),lon:Number(point.lon)})),destinationPoint];
     const locations=rawLocations.filter((point,index,all)=>index===0||distanceKm(point,all[index-1])>0.08).map(point=>({lat:point.lat,lon:point.lon,type:'break'}));
     if(locations.length<2)throw new Error('No hay suficientes puntos para recalcular la ruta.');
-    const avoid=incident.routeCoordinates.slice(0,12);
+    const avoid=roadworkAvoidPoints(incident.routeCoordinates,12);
     const plan={region:current.region||'peninsula',type:current.type||'Mixta'};
     const result=await requestRoute(locations,plan,avoid);
     const stillNear=avoid.some(location=>{
