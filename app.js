@@ -817,16 +817,25 @@ async function reverseCurrentRoute(){
   const button=$('reverseRoute');if(button){button.disabled=true;button.textContent='⏳ Recalculando…'}
   stopVoiceNavigation();
   try{
-    const shape=current.shape,cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1];
-    const sampleAt=d=>{let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;return {lat:shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,lon:shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f}};
-    const samples=[];for(let d=7;d<total-1;d+=7)samples.push(sampleAt(d));
-    const reversed=[{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]},...samples.reverse(),{lat:shape[0][0],lon:shape[0][1]}];
-    const compact=reversed.filter((p,i)=>i===0||i===reversed.length-1||distanceKm(reversed[i-1],p)>0.5);
-    const detectedRegion=detectIsland({latitude:shape[0][0],longitude:shape[0][1]});
-    const plan={region:detectedRegion||'peninsula',type:current.type||'Mixta'};
-    const result=await requestRoute(compact.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[plan.region]?{exclude_ferry:true}:{}})),plan);
+    const shape=current.shape;
+    const start={lat:Number(shape[shape.length-1][0]),lon:Number(shape[shape.length-1][1])};
+    const end={lat:Number(shape[0][0]),lon:Number(shape[0][1])};
+    const waypoints=(Array.isArray(current.routePoints)?current.routePoints:[])
+      .slice().reverse()
+      .filter(p=>Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon)))
+      .map(p=>({lat:Number(p.lat),lon:Number(p.lon),name:p.name||'Punto de paso'}));
+    // Solo enviamos los puntos de paso reales, nunca decenas de puntos de la geometría.
+    // Valhalla recibe exclusivamente los campos admitidos por su esquema de locations.
+    const locations=[start,...waypoints,end].filter((p,i,all)=>{
+      if(i===0)return true;
+      const previous=all[i-1];
+      return distanceKm(previous,p)>0.08;
+    }).map(p=>({lat:p.lat,lon:p.lon,type:'break'}));
+    const detectedRegion=detectIsland({latitude:start.lat,longitude:start.lon});
+    const plan={region:detectedRegion||current.region||'peninsula',type:current.type||'Mixta'};
+    const result=await requestRoute(locations,plan);
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
-    current={...current,shape:result.coords,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:(current.routePoints||[]).slice().reverse(),direction:current.direction==='inversa'?'normal':'inversa',realStops:current.realStops||[]};
+    current={...current,shape:result.coords,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:waypoints,direction:current.direction==='inversa'?'normal':'inversa',realStops:current.realStops||[]};
     current.realStop=current.realStops[0]||null;
     drawSharedRoute(current);render(current);
     $('mapStatus').textContent='🔄 Sentido inverso recalculado por carreteras. Revisa la ruta antes de salir.';
