@@ -822,6 +822,7 @@ function render(r){
     '<div class="actions">'+sharedActions+
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
+      '<button class="secondary" onclick="downloadCurrentGPX()">🧭 Exportar GPX</button>'+
       '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
       '<button class="secondary" onclick="document.getElementById(\'generate\').click()">🔄 Otra ruta</button>'+
     '</div>'+
@@ -1091,6 +1092,44 @@ async function loadSharedRoute(){
     console.error('No se pudo abrir la ruta compartida',error);
     alert('No se ha podido abrir esta ruta compartida. Pide que te envíen un enlace nuevo.');
   }
+}
+function xmlEscape(value){
+  return String(value??'').replace(/[<>&"']/g,ch=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[ch]));
+}
+async function downloadCurrentGPX(){
+  if(!current?.shape||current.shape.length<2){
+    alert('Primero genera o abre una ruta con trazado.');
+    return;
+  }
+  const points=current.shape.filter(p=>Array.isArray(p)&&Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1])));
+  if(points.length<2){
+    alert('La ruta no contiene suficientes coordenadas para exportar.');
+    return;
+  }
+  const name=String(current.name||'Mallorca Riders Route');
+  const trackPoints=points.map(([lat,lon])=>'<trkpt lat="'+Number(lat).toFixed(7)+'" lon="'+Number(lon).toFixed(7)+'"></trkpt>').join('');
+  const gpx='<?xml version="1.0" encoding="UTF-8"?>'+
+    '<gpx version="1.1" creator="Mallorca Riders Routes" xmlns="http://www.topografix.com/GPX/1/1">'+
+    '<metadata><name>'+xmlEscape(name)+'</name></metadata>'+
+    '<trk><name>'+xmlEscape(name)+'</name><trkseg>'+trackPoints+'</trkseg></trk></gpx>';
+  const fileName=(name.replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'')||'mallorca-riders-route')+'.gpx';
+  const file=new File([gpx],fileName,{type:'application/gpx+xml'});
+  try{
+    if(navigator.share&&navigator.canShare?.({files:[file]})){
+      await navigator.share({files:[file],title:name,text:'Ruta GPX exportada desde Mallorca Riders Routes'});
+      $('mapStatus').textContent='✅ GPX preparado para compartir o guardar. La compatibilidad con Suzuki mySPIN depende de la aplicación de navegación que acepte la ruta.';
+      return;
+    }
+  }catch(error){
+    if(error?.name==='AbortError')return;
+    console.warn('No se pudo abrir la hoja para compartir GPX; se probará la descarga.',error);
+  }
+  const url=URL.createObjectURL(file);
+  const link=document.createElement('a');
+  link.href=url;link.download=fileName;link.style.display='none';
+  document.body.appendChild(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  $('mapStatus').textContent='✅ Archivo GPX exportado. Puedes guardarlo o abrirlo con una aplicación compatible.';
 }
 function maps(){
   if(!current?.shape?.length||current.shape.length<2){alert('Primero genera, importa o abre una ruta.');return}
