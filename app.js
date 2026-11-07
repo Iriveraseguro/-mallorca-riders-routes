@@ -1112,7 +1112,7 @@ async function downloadCurrentGPX(){
     '<gpx version="1.1" creator="Mallorca Riders Routes" xmlns="http://www.topografix.com/GPX/1/1">'+
     '<metadata><name>'+xmlEscape(name)+'</name></metadata>'+
     '<trk><name>'+xmlEscape(name)+'</name><trkseg>'+trackPoints+'</trkseg></trk></gpx>';
-  const fileName=(name.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'')||'mallorca-riders-route')+'.gpx';
+  const fileName=(name.replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'')||'mallorca-riders-route')+'.gpx';
   const file=new File([gpx],fileName,{type:'application/gpx+xml'});
   try{
     if(navigator.share&&navigator.canShare?.({files:[file]})){
