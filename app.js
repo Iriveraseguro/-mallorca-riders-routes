@@ -190,7 +190,7 @@ function addManualWaypoint(latlng){
   manualWaypoints.push({id,name:'Punto '+manualWaypoints.length,lat:latlng.lat,lon:latlng.lng});
   const marker=L.marker([latlng.lat,latlng.lng],{draggable:true}).addTo(map);
   marker._manualPointId=id;
-  marker.on('dragend',()=>{const p=marker.getLatLng(),point=manualWaypoints.find(w=>w.id===id);if(point){point.lat=p.lat;point.lon=p.lng;manualRouteActive=false}});
+  marker.on('dragend',()=>{const p=marker.getLatLng(),point=manualWaypoints.find(w=>w.id===id);if(point){point.lat=p.lat;point.lon=p.lng}});
   manualMarkers.push(marker);refreshManualPointLabels();marker.openPopup();manualRouteActive=false;
   $('mapStatus').textContent='📍 '+manualWaypoints.length+' punto(s) colocados. Toca un punto para borrarlo individualmente. Añade al menos 2 y pulsa «Terminar puntos».';
 }
@@ -432,6 +432,7 @@ function routePlan(){
   // En modo manual, los puntos dibujados por el usuario son el origen y
   // los destinos; no dependemos de que exista una salida automática elegida.
   let st;
+  if(manualWaypoints.length>0&&!manualRouteActive){$('mapStatus').textContent='⚠️ Tienes puntos manuales colocados. Pulsa «Terminar puntos» antes de generar la ruta; no usaré una ruta automática que los ignore.';return null;}
   if(manualRouteActive){
     if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Coloca al menos 2 puntos y pulsa «Terminar puntos».';return null;}
     st={start:{lat:manualWaypoints[0].lat,lon:manualWaypoints[0].lon},targets:manualWaypoints.slice(1).map((p,i)=>({...p,name:'Punto '+(i+2)})),label:'ruta con puntos manuales'};
@@ -1341,6 +1342,11 @@ async function generateRoute(){
       candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
       if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
       const result=await requestRoute(locations,candidate);
+      if(candidate.manual){
+        const manualPoints=[candidate.start,...candidate.targets];
+        const missed=manualPoints.map((point,index)=>({index:index+1,distanceKm:Math.min(...result.coords.map(coord=>distanceKm(point,{lat:coord[0],lon:coord[1]})))})).find(point=>point.distanceKm>0.5);
+        if(missed)throw new Error('MANUAL_WAYPOINT_NOT_REACHED:'+missed.index+':'+missed.distanceKm.toFixed(2));
+      }
       const loopMetrics=$('circle').checked?circularRouteMetrics(result.coords,candidate.start):null;
       if(loopMetrics&&!loopMetrics.valid)throw new Error('ROUTE_NOT_CIRCULAR');
       return {result,candidate,score:routeScore(result,candidate,loopMetrics),loopMetrics};
@@ -1393,6 +1399,7 @@ async function generateRoute(){
     else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
     else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
     else if(reason==='ROUTE_NOT_CIRCULAR')msg='⚠️ No he encontrado un circuito cerrado fiable que vuelva al punto de salida sin repetir demasiado el mismo tramo. Prueba otra distancia o tipo de ruta.';
+    else if(reason.startsWith('MANUAL_WAYPOINT_NOT_REACHED:')){const parts=reason.split(':');msg='⚠️ No he podido respetar el punto manual '+parts[1]+': la carretera calculada queda a '+parts[2]+' km. Mueve ese punto más cerca de una carretera y vuelve a generar. No aceptaré una ruta que lo ignore.';}
     else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
     else if(reason==='NETWORK')msg='⚠️ No hay conexión con el servidor de rutas.';
     else if(reason.startsWith('HTTP_'))msg=`⚠️ El servidor de rutas ha rechazado la petición (${reason.slice(0,100)}).`;
