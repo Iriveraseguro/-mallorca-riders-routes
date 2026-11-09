@@ -1604,7 +1604,7 @@ async function share(){
 
 function getSharedRouteShareLinks(route=current){
   if(!route?.sharedRouteId)return null;
-  const shareUrl=new URL(window.location.href);
+  const shareUrl=new URL(MRR_NATIVE?'https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/':window.location.href);
   shareUrl.hash=new URLSearchParams({shared:route.sharedRouteId}).toString();
   const url=shareUrl.toString();
   const details=[route.km||'',route.duration||''].filter(Boolean).join(' · ');
