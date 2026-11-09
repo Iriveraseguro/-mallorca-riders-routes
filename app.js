@@ -707,6 +707,16 @@ async function requestRoute(locations,plan){
   const geometry=route.geometry;
   const coords=Array.isArray(geometry?.coordinates)?geometry.coordinates.map(c=>[Number(c[1]),Number(c[0])]).filter(c=>Number.isFinite(c[0])&&Number.isFinite(c[1])):[];
   if(coords.length<2)throw new Error('Sin geometría');
+  // Una ruta marcada como circular debe terminar realmente junto al punto de salida.
+  // No basta con enviar el origen como último waypoint: Valhalla puede devolver
+  // una geometría incompleta o terminar en una carretera cercana.
+  const closureKm=distanceKm(
+    {lat:coords[0][0],lon:coords[0][1]},
+    {lat:coords[coords.length-1][0],lon:coords[coords.length-1][1]}
+  );
+  if($('circle').checked && closureKm>0.8){
+    throw new Error('CIRCLE_NOT_CLOSED_'+closureKm.toFixed(2));
+  }
   const summary={distance:Number(route.distance||0)/1000,duration:Number(route.duration||0)};
   // OSRM devuelve pasos/maneuvers; bloqueamos cualquier indicio de ferry aunque el servidor lo haya permitido.
   const hasFerry=route.legs?.some(leg=>leg.steps?.some(step=>String(step.mode||'').toLowerCase()==='ferry'||String(step.name||'').toLowerCase().includes('ferry')||String(step.maneuver?.type||'').toLowerCase().includes('ferry')))||false;
@@ -714,7 +724,7 @@ async function requestRoute(locations,plan){
   const boundary=ISLANDS[plan.region]?await loadRegionBoundary(plan.region):null;
   if(ISLANDS[plan.region] && !boundary) throw new Error('ISLAND_BOUNDARY_UNAVAILABLE');
   if(ISLANDS[plan.region]&&!routeShapeIsInRegion(coords,plan.region,boundary))throw new Error('ROUTE_LEFT_ISLAND');
-  return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration}};
+  return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration,closureKm}};
 }
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
@@ -776,6 +786,7 @@ async function generateRoute(){
     let msg;
     if(reason==='ROUTE_HAS_FERRY')msg='⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.';
     else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
+    else if(reason.startsWith('CIRCLE_NOT_CLOSED_'))msg='⚠️ El motor no ha cerrado la ruta en el punto de salida (separación final: '+reason.split('_').pop()+' km). He descartado ese recorrido para no presentarte una ruta abierta como circular. Prueba otra distancia o salida.';
     else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
     else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
     else if(reason==='NETWORK')msg='⚠️ No hay conexión con el servidor de rutas.';
