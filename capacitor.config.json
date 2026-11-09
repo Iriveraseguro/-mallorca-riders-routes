@@ -1,0 +1,8 @@
+{
+  "appId": "com.mallorcariders.routes",
+  "appName": "Mallorca Riders Routes",
+  "webDir": "dist",
+  "android": {
+    "useLegacyBridge": true
+  }
+}
