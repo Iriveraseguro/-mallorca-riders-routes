@@ -190,7 +190,7 @@ function addManualWaypoint(latlng){
   manualWaypoints.push({id,name:'Punto '+manualWaypoints.length,lat:latlng.lat,lon:latlng.lng});
   const marker=L.marker([latlng.lat,latlng.lng],{draggable:true}).addTo(map);
   marker._manualPointId=id;
-  marker.on('dragend',()=>{const p=marker.getLatLng(),point=manualWaypoints.find(w=>w.id===id);if(point){point.lat=p.lat;point.lon=p.lng;manualRouteActive=false}});
+  marker.on('dragend',()=>{const p=marker.getLatLng(),point=manualWaypoints.find(w=>w.id===id);if(point){point.lat=p.lat;point.lon=p.lng}});
   manualMarkers.push(marker);refreshManualPointLabels();marker.openPopup();manualRouteActive=false;
   $('mapStatus').textContent='📍 '+manualWaypoints.length+' punto(s) colocados. Toca un punto para borrarlo individualmente. Añade al menos 2 y pulsa «Terminar puntos».';
 }
@@ -432,6 +432,7 @@ function routePlan(){
   // En modo manual, los puntos dibujados por el usuario son el origen y
   // los destinos; no dependemos de que exista una salida automática elegida.
   let st;
+  if(manualWaypoints.length>0&&!manualRouteActive){$('mapStatus').textContent='⚠️ Tienes puntos manuales colocados. Pulsa «Terminar puntos» antes de generar la ruta; no usaré una ruta automática que los ignore.';return null;}
   if(manualRouteActive){
     if(manualWaypoints.length<2){$('mapStatus').textContent='⚠️ Coloca al menos 2 puntos y pulsa «Terminar puntos».';return null;}
     st={start:{lat:manualWaypoints[0].lat,lon:manualWaypoints[0].lon},targets:manualWaypoints.slice(1).map((p,i)=>({...p,name:'Punto '+(i+2)})),label:'ruta con puntos manuales'};
@@ -485,19 +486,27 @@ function buildRouteCandidates(plan){
       combos.push({trio,score:radialError+spreadPenalty*8});
     }
     combos.sort((a,b)=>a.score-b.score);
-    // Antes se elegían siempre las tres combinaciones mejor puntuadas.
-    // Ahora se explora un grupo más amplio y se evita repetir las usadas recientemente.
-    const recent=new Set(readRouteHistory(plan));
-    const top=combos.slice(0,Math.min(10,combos.length));
-    const unseen=top.filter(combo=>!recent.has(routeTargetSignature(combo.trio)));
-    const source=unseen.length>=3?unseen:top;
-    for(let i=source.length-1;i>0;i--){
-      const j=Math.floor(Math.random()*(i+1));
-      [source[i],source[j]]=[source[j],source[i]];
+    if($('circle').checked){
+      // En circular se prueban dos combinaciones en ambos sentidos de paso.
+      // La selección final se hará por calidad del circuito, no al azar.
+      combos.slice(0,2).forEach((combo,index)=>{
+        add(combo.trio,`circular-horario-${index+1}`);
+        add([...combo.trio].reverse(),`circular-antihorario-${index+1}`);
+      });
+    }else{
+      // Mantener la variedad aleatoria existente para rutas no circulares.
+      const recent=new Set(readRouteHistory(plan));
+      const top=combos.slice(0,Math.min(10,combos.length));
+      const unseen=top.filter(combo=>!recent.has(routeTargetSignature(combo.trio)));
+      const source=unseen.length>=3?unseen:top;
+      for(let i=source.length-1;i>0;i--){
+        const j=Math.floor(Math.random()*(i+1));
+        [source[i],source[j]]=[source[j],source[i]];
+      }
+      source.slice(0,2).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
     }
-    source.slice(0,2).forEach((combo,index)=>add(combo.trio,`variante-${index+1}`));
   }
-  return candidates.slice(0,3);
+  return candidates.slice(0,$('circle').checked?5:3);
 }
 function routeOverlapPenalty(coords){
   if(!Array.isArray(coords)||coords.length<30)return 0;
@@ -551,19 +560,24 @@ function circularRouteMetrics(coords,start){
   // Valhalla ajusta el punto solicitado a la carretera más próxima.
   // Admitimos ese pequeño ajuste, pero no una llegada a otra zona ni un regreso
   // que reutilice casi todo el camino de ida.
-  const valid=startGapKm<=1.0&&finishGapKm<=1.0&&closureGapKm<=0.8&&overlapRatio<=0.58&&totalKm>=8;
+  // La llegada debe quedar cerca del mismo punto y el trazado no puede
+  // reutilizar una parte importante del recorrido de ida.
+  const valid=startGapKm<=0.7&&finishGapKm<=0.7&&closureGapKm<=0.4&&overlapRatio<=0.34&&totalKm>=8;
   return {valid,startGapKm,finishGapKm,closureGapKm,overlapRatio,totalKm};
 }
 function routeScore(result,plan,loopMetrics=null){
   const kmError=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
   const timeError=Math.abs(result.summary.timeSec/60-plan.requestedMinutes)/Math.max(plan.requestedMinutes,1);
   const overlapRatio=loopMetrics?.overlapRatio??routeOverlapPenalty(result.coords);
-  const overlapPenalty=$('circle').checked?overlapRatio*2.8:0;
+  const overlapPenalty=$('circle').checked?overlapRatio*4.5:0;
   const closurePenalty=$('circle').checked&&loopMetrics?loopMetrics.closureGapKm*2:0;
   return kmError*0.78+timeError*0.22+overlapPenalty+closurePenalty;
 }
 function chooseRouteCandidate(valid,plan){
   if(valid.length===1)return valid[0];
+  // En modo circular priorizamos siempre el circuito con menos repetición
+  // y mejor ajuste, sin escoger al azar una alternativa inferior.
+  if($('circle').checked)return [...valid].sort((a,b)=>a.score-b.score)[0];
   const recent=new Set(readRouteHistory(plan));
   const unseen=valid.filter(item=>!recent.has(item.candidate.signature));
   const pool=unseen.length?unseen:valid;
@@ -1328,12 +1342,21 @@ async function generateRoute(){
       candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
       if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
       const result=await requestRoute(locations,candidate);
+      if(candidate.manual){
+        const manualPoints=[candidate.start,...candidate.targets];
+        const missed=manualPoints.map((point,index)=>({index:index+1,distanceKm:Math.min(...result.coords.map(coord=>distanceKm(point,{lat:coord[0],lon:coord[1]})))})).find(point=>point.distanceKm>0.5);
+        if(missed)throw new Error('MANUAL_WAYPOINT_NOT_REACHED:'+missed.index+':'+missed.distanceKm.toFixed(2));
+      }
       const loopMetrics=$('circle').checked?circularRouteMetrics(result.coords,candidate.start):null;
       if(loopMetrics&&!loopMetrics.valid)throw new Error('ROUTE_NOT_CIRCULAR');
       return {result,candidate,score:routeScore(result,candidate,loopMetrics),loopMetrics};
     }));
     const valid=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
-    if(!valid.length)throw(settled.find(x=>x.status==='rejected')?.reason||new Error('SIN_RUTA'));
+    if(!valid.length){
+      const rejected=settled.filter(x=>x.status==='rejected');
+      const circularFailure=rejected.find(x=>String(x.reason?.message||'')==='ROUTE_NOT_CIRCULAR');
+      throw(circularFailure?.reason||rejected[0]?.reason||new Error('SIN_RUTA'));
+    }
     const selected=chooseRouteCandidate(valid,plan);
     const {result,candidate:chosen}=selected;
     rememberRouteChoice(plan,chosen.signature);
@@ -1376,6 +1399,7 @@ async function generateRoute(){
     else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
     else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
     else if(reason==='ROUTE_NOT_CIRCULAR')msg='⚠️ No he encontrado un circuito cerrado fiable que vuelva al punto de salida sin repetir demasiado el mismo tramo. Prueba otra distancia o tipo de ruta.';
+    else if(reason.startsWith('MANUAL_WAYPOINT_NOT_REACHED:')){const parts=reason.split(':');msg='⚠️ No he podido respetar el punto manual '+parts[1]+': la carretera calculada queda a '+parts[2]+' km. Mueve ese punto más cerca de una carretera y vuelve a generar. No aceptaré una ruta que lo ignore.';}
     else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
     else if(reason==='NETWORK')msg='⚠️ No hay conexión con el servidor de rutas.';
     else if(reason.startsWith('HTTP_'))msg=`⚠️ El servidor de rutas ha rechazado la petición (${reason.slice(0,100)}).`;

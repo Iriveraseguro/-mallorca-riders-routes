@@ -6,10 +6,15 @@ on:
       - fix/poi-arrows-overpass-repair-20261030
       - feature/voz-radares-ruta-inversa
       - feature/avisos-obras-desvios
+      - fix/circular-route-quality-v2
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: mallorca-riders-test-worker
+  cancel-in-progress: true
 
 jobs:
   deploy-test:
@@ -89,8 +94,8 @@ jobs:
           [[ "$HEALTH" == *'"status":"ok"'* ]]
           [[ "$HEALTH" == *'"build":"mrr-roadworks-2026-11-06-v5"'* ]]
           HTML="$(curl -fsS --max-time 20 "$BASE/")"
-          [[ "$HTML" == *'app.js?v=81'* ]]
-          APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=81")"
+          [[ "$HTML" == *'app.js?v=83'* ]]
+          APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=83")"
           [[ "$APP" == *'function parseDgtRoadworks'* ]]
           [[ "$APP" == *'async function acceptRoadworkDetour'* ]]
           [[ "$APP" == *'function roadworkWarningThresholds'* ]]
@@ -101,9 +106,14 @@ jobs:
           [[ "$APP" == *"function circularRouteMetrics"* ]]
           [[ "$APP" == *"function peninsulaCircularWaypoints"* ]]
           [[ "$APP" == *"ROUTE_NOT_CIRCULAR"* ]]
+          [[ "$APP" == *"circular-antihorario-"* ]]
+          [[ "$APP" == *"overlapRatio<=0.34"* ]]
+          [[ "$APP" == *"overlapRatio*4.5"* ]]
+          [[ "$APP" == *"manualWaypoints.length>0&&!manualRouteActive"* ]]
+          [[ "$APP" == *"MANUAL_WAYPOINT_NOT_REACHED"* ]]
           SW="$(curl -fsS --max-time 20 "$BASE/sw.js")"
-          [[ "$SW" == *'mrr-v23-circular-route-validation'* ]]
-          echo "Verified: test Worker, app.js v81, circular-route validation, optional GPS start, adaptive roadworks alerts and service-worker cache."
+          [[ "$SW" == *'mrr-v25-manual-waypoints-v1'* ]]
+          echo "Verified: test Worker, app.js v83, manual waypoint enforcement, circular-route validation, optional GPS start, adaptive roadworks alerts and service-worker cache."
 
       - name: Probe live DGT traffic feed
         if: steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' || steps.deploy3.outcome == 'success'
