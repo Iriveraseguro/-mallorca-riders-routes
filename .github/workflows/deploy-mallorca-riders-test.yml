@@ -96,7 +96,7 @@ jobs:
           [[ "$HEALTH" == *'"build":"mrr-roadworks-2026-11-06-v5"'* ]]
           HTML="$(curl -fsS --max-time 20 "$BASE/")"
           [[ "$HTML" == *'app.js?v=84'* ]]
-          APP="$(curl -fsS --max-time 20 $BASE/app.js?v=84)"
+          APP="$(curl -fsS --max-time 20 "$BASE/app.js?v=84")"
           [[ "$APP" == *'function parseDgtRoadworks'* ]]
           [[ "$APP" == *'async function acceptRoadworkDetour'* ]]
           [[ "$APP" == *'function roadworkWarningThresholds'* ]]
