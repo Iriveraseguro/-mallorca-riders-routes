@@ -1,4 +1,6 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
+let gpsRecording=false,gpsWatchId=null,gpsTrack=[],gpsStartedAt=null,gpsDistanceMeters=0,gpsTrackLine=null,gpsTrackMarker=null;
+const GPS_DRAFT_KEY='mrr-gps-recording-draft-v1';
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -383,6 +385,65 @@ async function refreshApplication(){
   }catch(error){console.warn('No se pudo comprobar la actualización',error)}
   window.location.reload();
 }
+
+function gpsFormatDuration(ms){const n=Math.max(0,Math.floor(ms/60000)),h=Math.floor(n/60),m=n%60;return h?h+' h '+m+' min':m+' min'}
+function gpsUpdateStatus(message){
+ const el=$('gpsRecordStatus');if(el)el.textContent=message;
+ const start=$('gpsStartRecording'),stop=$('gpsStopRecording'),saveButton=$('gpsSaveRecording'),discard=$('gpsDiscardRecording');
+ if(start)start.disabled=gpsRecording;if(stop)stop.disabled=!gpsRecording;
+ if(saveButton)saveButton.disabled=gpsRecording||gpsTrack.length<2;
+ if(discard)discard.disabled=gpsRecording||gpsTrack.length===0;
+ const stats=$('gpsRecordStats');if(stats){const elapsed=gpsStartedAt?Date.now()-gpsStartedAt:(gpsTrack.length?Date.now()-(gpsTrack[0][2]||Date.now()):0);stats.textContent=(gpsDistanceMeters/1000).toFixed(1).replace('.',',')+' km · '+gpsFormatDuration(elapsed)+' · '+gpsTrack.length+' posiciones'}
+}
+function gpsPersistDraft(){try{localStorage.setItem(GPS_DRAFT_KEY,JSON.stringify({points:gpsTrack.slice(-12000),startedAt:gpsStartedAt,distanceMeters:gpsDistanceMeters}))}catch(e){console.warn('No se pudo guardar el borrador GPS',e);gpsUpdateStatus('⚠️ No hay espacio suficiente en este dispositivo para guardar el recorrido.')}}
+function gpsRestoreDraft(){
+ try{const d=JSON.parse(localStorage.getItem(GPS_DRAFT_KEY)||'null');if(!d||!Array.isArray(d.points)||!d.points.length)return;
+ gpsTrack=d.points.filter(p=>Array.isArray(p)&&p.length>=3&&Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1])));
+ gpsStartedAt=Number(d.startedAt)||gpsTrack[0]?.[2]||Date.now();gpsDistanceMeters=Number(d.distanceMeters)||0;
+ if(gpsTrack.length){gpsDrawTrack();gpsUpdateStatus('⏸️ Se ha recuperado una grabación anterior. Puedes guardarla o descartarla.')}
+ }catch(e){console.warn('No se pudo recuperar el borrador GPS',e)}
+}
+function gpsDrawTrack(){
+ if(!map||!gpsTrack.length)return;const coords=gpsTrack.map(p=>[p[0],p[1]]),last=coords[coords.length-1];
+ if(coords.length>1){if(!gpsTrackLine)gpsTrackLine=L.polyline(coords,{color:'#16a34a',weight:6,opacity:.95}).addTo(map);else gpsTrackLine.setLatLngs(coords)}
+ if(!gpsTrackMarker)gpsTrackMarker=L.circleMarker(last,{radius:7,color:'#fff',weight:2,fillColor:'#16a34a',fillOpacity:1}).addTo(map);else gpsTrackMarker.setLatLng(last);
+ if(coords.length===1)map.setView(last,15);else if(gpsRecording)map.panTo(last,{animate:true,duration:.25});else map.fitBounds(L.latLngBounds(coords),{padding:[28,28]});
+}
+function gpsAcceptPosition(p){
+ if(!gpsRecording)return;const c=p.coords;if(!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude))return;
+ if(Number.isFinite(c.accuracy)&&c.accuracy>60){gpsUpdateStatus('📡 Precisión GPS baja ('+Math.round(c.accuracy)+' m). Esperando…');return}
+ const point=[c.latitude,c.longitude,Number(p.timestamp)||Date.now(),Number(c.accuracy)||0],prev=gpsTrack[gpsTrack.length-1];
+ if(prev){const moved=distanceKm({lat:prev[0],lon:prev[1]},{lat:point[0],lon:point[1]})*1000,elapsed=point[2]-(prev[2]||point[2]);
+ if(moved<7&&elapsed<15000)return;if(moved>1000&&elapsed<5000){gpsUpdateStatus('⚠️ Salto GPS descartado; esperando señal estable…');return}gpsDistanceMeters+=moved}
+ gpsTrack.push(point);if(gpsTrack.length>12000)gpsTrack=gpsTrack.filter((_,i)=>i===0||i%2===0);
+ gpsDrawTrack();gpsPersistDraft();gpsUpdateStatus('🔴 Grabando recorrido GPS. Para esta primera prueba, mantén la app abierta y la pantalla activa.');
+}
+function gpsStartRecording(){
+ if(gpsRecording)return;if(!navigator.geolocation){gpsUpdateStatus('❌ Este navegador no permite acceder al GPS.');return}
+ if(gpsTrack.length){if(!confirm('Hay una grabación anterior sin guardar. ¿Quieres descartarla y empezar otra?'))return;gpsDiscardRecording()}
+ gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=Date.now();gpsRecording=true;gpsPersistDraft();gpsUpdateStatus('⏳ Esperando señal GPS…');
+ try{gpsWatchId=navigator.geolocation.watchPosition(gpsAcceptPosition,e=>{gpsUpdateStatus('❌ '+locationErrorMessage(e)+' La grabación se ha detenido.');gpsStopRecording()},{enableHighAccuracy:true,maximumAge:3000,timeout:20000})}
+ catch(e){gpsRecording=false;gpsWatchId=null;gpsUpdateStatus('❌ No se pudo iniciar el GPS: '+(e.message||'error'))}
+}
+function gpsStopRecording(){if(gpsWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null;gpsRecording=false;gpsPersistDraft();gpsUpdateStatus(gpsTrack.length>1?'⏸️ Grabación detenida. Ya puedes guardar el recorrido.':'⚠️ Aún no hay suficientes posiciones GPS para guardar una ruta.')}
+function gpsDiscardRecording(){
+ if(gpsRecording)gpsStopRecording();gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;
+ if(gpsTrackLine&&map)map.removeLayer(gpsTrackLine);if(gpsTrackMarker&&map)map.removeLayer(gpsTrackMarker);gpsTrackLine=null;gpsTrackMarker=null;
+ try{localStorage.removeItem(GPS_DRAFT_KEY)}catch(_){}gpsUpdateStatus('Grabación descartada. Puedes empezar otra cuando quieras.')
+}
+async function gpsSaveRecording(){
+ if(gpsRecording){alert('Detén la grabación antes de guardarla.');return}if(gpsTrack.length<2){alert('Necesitas al menos dos posiciones GPS.');return}
+ const name=String($('gpsRouteName')?.value||'').trim()||('Ruta GPS '+new Date(gpsStartedAt||Date.now()).toLocaleDateString('es-ES'));
+ const shape=gpsTrack.map(p=>[Number(p[0]),Number(p[1])]),km=gpsDistanceMeters/1000;
+ const durationMs=Math.max(0,(gpsTrack[gpsTrack.length-1][2]||Date.now())-(gpsStartedAt||gpsTrack[0][2]||Date.now()));
+ const region=detectIsland({latitude:shape[0][0],longitude:shape[0][1]})||$('region').value||'mallorca';
+ current={id:Date.now(),name,km:km.toFixed(1).replace('.',',')+' km',duration:gpsFormatDuration(durationMs),curves:3,stop:'none',realStop:null,realStops:[],poiError:null,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Grabación GPS',type:'Mixta',shape,routePoints:[],region,start:'Grabación GPS',requestedKm:km,requestedDuration:durationMs/60000,requestedNote:'Recorrido registrado directamente por GPS; '+gpsTrack.length+' posiciones.',recordedGps:true};
+ clearRoute();routeLine=L.polyline(shape,{weight:6,opacity:.95,color:'#16a34a'}).addTo(map);addDirectionalArrows(shape);map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+ gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;try{localStorage.removeItem(GPS_DRAFT_KEY)}catch(_){}
+ gpsUpdateStatus('✅ Recorrido preparado. Guardándolo en «Mis rutas»…');render(current);await save();gpsUpdateStatus('✅ Ruta GPS guardada en «Mis rutas» en este dispositivo.');$('result')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+document.addEventListener('visibilitychange',()=>{if(gpsRecording&&document.hidden){gpsPersistDraft();gpsUpdateStatus('⚠️ La app ha pasado a segundo plano. El sistema puede suspender el GPS; para esta primera prueba mantén la pantalla activa.')}});
+
 function initApp(){
   // Conectar la importación antes de inicializar el mapa, para que el botón
   // no quede inactivo si falla la carga de Leaflet.
@@ -421,6 +482,11 @@ function initApp(){
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('refreshApp').onclick=refreshApplication;
+  $('gpsStartRecording').onclick=gpsStartRecording;
+  $('gpsStopRecording').onclick=gpsStopRecording;
+  $('gpsSaveRecording').onclick=gpsSaveRecording;
+  $('gpsDiscardRecording').onclick=()=>{if(confirm('¿Descartar el recorrido GPS grabado?'))gpsDiscardRecording()};
+  gpsRestoreDraft();
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
   updateRegionUI();
@@ -1462,7 +1528,7 @@ function render(r){
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
-function repeat(i){current=get()[i];render(current)}
+function repeat(i){current=get()[i];if(current?.recordedGps&&Array.isArray(current.shape)&&current.shape.length>1){clearRoute();routeLine=L.polyline(current.shape,{weight:6,opacity:.95,color:'#16a34a'}).addTo(map);addDirectionalArrows(current.shape);map.fitBounds(routeLine.getBounds(),{padding:[30,30]});}render(current)}
 function encodePolyline6(coords){
   let lastLat=0,lastLon=0,out='';
   const encodeValue=value=>{
