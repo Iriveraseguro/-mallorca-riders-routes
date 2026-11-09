@@ -710,12 +710,20 @@ async function requestRoute(locations,plan){
   // Una ruta marcada como circular debe terminar realmente junto al punto de salida.
   // No basta con enviar el origen como último waypoint: Valhalla puede devolver
   // una geometría incompleta o terminar en una carretera cercana.
+  const startOffsetKm=distanceKm(
+    {lat:coords[0][0],lon:coords[0][1]},
+    {lat:plan.start.lat,lon:plan.start.lon}
+  );
+  const endOffsetKm=distanceKm(
+    {lat:coords[coords.length-1][0],lon:coords[coords.length-1][1]},
+    {lat:plan.start.lat,lon:plan.start.lon}
+  );
   const closureKm=distanceKm(
     {lat:coords[0][0],lon:coords[0][1]},
     {lat:coords[coords.length-1][0],lon:coords[coords.length-1][1]}
   );
-  if($('circle').checked && closureKm>0.8){
-    throw new Error('CIRCLE_NOT_CLOSED_'+closureKm.toFixed(2));
+  if($('circle').checked && Math.max(startOffsetKm,endOffsetKm,closureKm)>0.8){
+    throw new Error('CIRCLE_NOT_CLOSED_'+Math.max(startOffsetKm,endOffsetKm,closureKm).toFixed(2));
   }
   const summary={distance:Number(route.distance||0)/1000,duration:Number(route.duration||0)};
   // OSRM devuelve pasos/maneuvers; bloqueamos cualquier indicio de ferry aunque el servidor lo haya permitido.
@@ -1107,7 +1115,7 @@ async function loadSharedRoute(){
 function xmlEscape(value){
   return String(value??'').replace(/[<>&"']/g,ch=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[ch]));
 }
-async function downloadCurrentGPX(){
+async async function downloadCurrentGPX(){
   if(!current?.shape||current.shape.length<2){
     alert('Primero genera o abre una ruta con trazado.');
     return;
