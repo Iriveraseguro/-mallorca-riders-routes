@@ -404,11 +404,10 @@ function gpsRestoreDraft(){
  }catch(e){console.warn('No se pudo recuperar el borrador GPS',e)}
 }
 function gpsDrawTrack(){
- if(!map||!gpsTrack.length)return;const coords=gpsTrack.map(p=>[p[0],p[1]]);
- if(gpsTrackLine)map.removeLayer(gpsTrackLine);if(gpsTrackMarker)map.removeLayer(gpsTrackMarker);
- gpsTrackLine=coords.length>1?L.polyline(coords,{color:'#16a34a',weight:6,opacity:.95}).addTo(map):null;
- gpsTrackMarker=L.circleMarker(coords[coords.length-1],{radius:7,color:'#fff',weight:2,fillColor:'#16a34a',fillOpacity:1}).addTo(map);
- if(coords.length>1)map.fitBounds(L.latLngBounds(coords),{padding:[28,28]});else map.setView(coords[0],15);
+ if(!map||!gpsTrack.length)return;const coords=gpsTrack.map(p=>[p[0],p[1]]),last=coords[coords.length-1];
+ if(coords.length>1){if(!gpsTrackLine)gpsTrackLine=L.polyline(coords,{color:'#16a34a',weight:6,opacity:.95}).addTo(map);else gpsTrackLine.setLatLngs(coords)}
+ if(!gpsTrackMarker)gpsTrackMarker=L.circleMarker(last,{radius:7,color:'#fff',weight:2,fillColor:'#16a34a',fillOpacity:1}).addTo(map);else gpsTrackMarker.setLatLng(last);
+ if(coords.length===1)map.setView(last,15);else if(gpsRecording)map.panTo(last,{animate:true,duration:.25});else map.fitBounds(L.latLngBounds(coords),{padding:[28,28]});
 }
 function gpsAcceptPosition(p){
  if(!gpsRecording)return;const c=p.coords;if(!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude))return;
@@ -1529,7 +1528,7 @@ function render(r){
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
-function repeat(i){current=get()[i];render(current)}
+function repeat(i){current=get()[i];if(current?.recordedGps&&Array.isArray(current.shape)&&current.shape.length>1){clearRoute();routeLine=L.polyline(current.shape,{weight:6,opacity:.95,color:'#16a34a'}).addTo(map);addDirectionalArrows(current.shape);map.fitBounds(routeLine.getBounds(),{padding:[30,30]});}render(current)}
 function encodePolyline6(coords){
   let lastLat=0,lastLon=0,out='';
   const encodeValue=value=>{
