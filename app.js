@@ -707,6 +707,24 @@ async function requestRoute(locations,plan){
   const geometry=route.geometry;
   const coords=Array.isArray(geometry?.coordinates)?geometry.coordinates.map(c=>[Number(c[1]),Number(c[0])]).filter(c=>Number.isFinite(c[0])&&Number.isFinite(c[1])):[];
   if(coords.length<2)throw new Error('Sin geometría');
+  // Una ruta marcada como circular debe terminar realmente junto al punto de salida.
+  // No basta con enviar el origen como último waypoint: Valhalla puede devolver
+  // una geometría incompleta o terminar en una carretera cercana.
+  const startOffsetKm=distanceKm(
+    {lat:coords[0][0],lon:coords[0][1]},
+    {lat:plan.start.lat,lon:plan.start.lon}
+  );
+  const endOffsetKm=distanceKm(
+    {lat:coords[coords.length-1][0],lon:coords[coords.length-1][1]},
+    {lat:plan.start.lat,lon:plan.start.lon}
+  );
+  const closureKm=distanceKm(
+    {lat:coords[0][0],lon:coords[0][1]},
+    {lat:coords[coords.length-1][0],lon:coords[coords.length-1][1]}
+  );
+  if($('circle').checked && Math.max(startOffsetKm,endOffsetKm,closureKm)>0.8){
+    throw new Error('CIRCLE_NOT_CLOSED_'+Math.max(startOffsetKm,endOffsetKm,closureKm).toFixed(2));
+  }
   const summary={distance:Number(route.distance||0)/1000,duration:Number(route.duration||0)};
   // OSRM devuelve pasos/maneuvers; bloqueamos cualquier indicio de ferry aunque el servidor lo haya permitido.
   const hasFerry=route.legs?.some(leg=>leg.steps?.some(step=>String(step.mode||'').toLowerCase()==='ferry'||String(step.name||'').toLowerCase().includes('ferry')||String(step.maneuver?.type||'').toLowerCase().includes('ferry')))||false;
@@ -714,7 +732,7 @@ async function requestRoute(locations,plan){
   const boundary=ISLANDS[plan.region]?await loadRegionBoundary(plan.region):null;
   if(ISLANDS[plan.region] && !boundary) throw new Error('ISLAND_BOUNDARY_UNAVAILABLE');
   if(ISLANDS[plan.region]&&!routeShapeIsInRegion(coords,plan.region,boundary))throw new Error('ROUTE_LEFT_ISLAND');
-  return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration}};
+  return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration,closureKm}};
 }
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
@@ -776,6 +794,7 @@ async function generateRoute(){
     let msg;
     if(reason==='ROUTE_HAS_FERRY')msg='⚠️ El motor devolvió un tramo en ferry y lo he bloqueado.';
     else if(reason==='ROUTE_LEFT_ISLAND')msg=`⚠️ El motor intentó sacar la ruta de ${ISLANDS[plan.region]?.name||'la zona seleccionada'}. He bloqueado ese recorrido.`;
+    else if(reason.startsWith('CIRCLE_NOT_CLOSED_'))msg='⚠️ El motor no ha cerrado la ruta en el punto de salida (separación final: '+reason.split('_').pop()+' km). He descartado ese recorrido para no presentarte una ruta abierta como circular. Prueba otra distancia o salida.';
     else if(reason==='ISLAND_BOUNDARY_UNAVAILABLE')msg='⚠️ No he podido verificar el contorno real de la isla. Comprueba la conexión e inténtalo de nuevo.';
     else if(reason==='TIMEOUT')msg='⚠️ El servidor de rutas está tardando demasiado.';
     else if(reason==='NETWORK')msg='⚠️ No hay conexión con el servidor de rutas.';
@@ -822,6 +841,7 @@ function render(r){
     '<div class="actions">'+sharedActions+
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
+      '<button class="secondary" onclick="downloadCurrentGPX()">🧭 Exportar GPX</button>'+
       '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
       '<button class="secondary" onclick="document.getElementById(\'generate\').click()">🔄 Otra ruta</button>'+
     '</div>'+
@@ -1091,6 +1111,44 @@ async function loadSharedRoute(){
     console.error('No se pudo abrir la ruta compartida',error);
     alert('No se ha podido abrir esta ruta compartida. Pide que te envíen un enlace nuevo.');
   }
+}
+function xmlEscape(value){
+  return String(value??'').replace(/[<>&"']/g,ch=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[ch]));
+}
+async function downloadCurrentGPX(){
+  if(!current?.shape||current.shape.length<2){
+    alert('Primero genera o abre una ruta con trazado.');
+    return;
+  }
+  const points=current.shape.filter(p=>Array.isArray(p)&&Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1])));
+  if(points.length<2){
+    alert('La ruta no contiene suficientes coordenadas para exportar.');
+    return;
+  }
+  const name=String(current.name||'Mallorca Riders Route');
+  const trackPoints=points.map(([lat,lon])=>'<trkpt lat="'+Number(lat).toFixed(7)+'" lon="'+Number(lon).toFixed(7)+'"></trkpt>').join('');
+  const gpx='<?xml version="1.0" encoding="UTF-8"?>'+
+    '<gpx version="1.1" creator="Mallorca Riders Routes" xmlns="http://www.topografix.com/GPX/1/1">'+
+    '<metadata><name>'+xmlEscape(name)+'</name></metadata>'+
+    '<trk><name>'+xmlEscape(name)+'</name><trkseg>'+trackPoints+'</trkseg></trk></gpx>';
+  const fileName=(name.replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'')||'mallorca-riders-route')+'.gpx';
+  const file=new File([gpx],fileName,{type:'application/gpx+xml'});
+  try{
+    if(navigator.share&&navigator.canShare?.({files:[file]})){
+      await navigator.share({files:[file],title:name,text:'Ruta GPX exportada desde Mallorca Riders Routes'});
+      $('mapStatus').textContent='✅ GPX preparado para compartir o guardar. La compatibilidad con Suzuki mySPIN depende de la aplicación de navegación que acepte la ruta.';
+      return;
+    }
+  }catch(error){
+    if(error?.name==='AbortError')return;
+    console.warn('No se pudo abrir la hoja para compartir GPX; se probará la descarga.',error);
+  }
+  const url=URL.createObjectURL(file);
+  const link=document.createElement('a');
+  link.href=url;link.download=fileName;link.style.display='none';
+  document.body.appendChild(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  $('mapStatus').textContent='✅ Archivo GPX exportado. Puedes guardarlo o abrirlo con una aplicación compatible.';
 }
 function maps(){
   if(!current?.shape?.length||current.shape.length<2){alert('Primero genera, importa o abre una ruta.');return}
