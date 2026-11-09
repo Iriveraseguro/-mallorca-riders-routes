@@ -1,6 +1,9 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
-let gpsRecording=false,gpsWatchId=null,gpsTrack=[],gpsStartedAt=null,gpsDistanceMeters=0,gpsTrackLine=null,gpsTrackMarker=null;
+let gpsRecording=false,gpsWatchId=null,gpsNativeWatchId=null,gpsTrack=[],gpsStartedAt=null,gpsDistanceMeters=0,gpsTrackLine=null,gpsTrackMarker=null;
 const GPS_DRAFT_KEY='mrr-gps-recording-draft-v1';
+const MRR_NATIVE=!!(window.Capacitor?.isNativePlatform?.()&&window.MRRNativeGPS);
+const API_BASE=MRR_NATIVE?'https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev':'';
+const apiUrl=path=>API_BASE+path;
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -117,7 +120,7 @@ $('centerMap').onclick=()=>{if(!initMap()) return; if(pos)map.setView([pos.latit
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');type=b.dataset.v});
 
 const APP_VERSION='v5.4';
-const VALHALLA_URL='/api/route';
+const VALHALLA_URL=apiUrl('/api/route');
 const VALHALLA_HEADERS={'Content-Type':'application/json'};
 
 function destinationPoint(lat,lon,distanceKm,bearingDeg){
@@ -416,16 +419,30 @@ function gpsAcceptPosition(p){
  if(prev){const moved=distanceKm({lat:prev[0],lon:prev[1]},{lat:point[0],lon:point[1]})*1000,elapsed=point[2]-(prev[2]||point[2]);
  if(moved<7&&elapsed<15000)return;if(moved>1000&&elapsed<5000){gpsUpdateStatus('⚠️ Salto GPS descartado; esperando señal estable…');return}gpsDistanceMeters+=moved}
  gpsTrack.push(point);if(gpsTrack.length>12000)gpsTrack=gpsTrack.filter((_,i)=>i===0||i%2===0);
- gpsDrawTrack();gpsPersistDraft();gpsUpdateStatus('🔴 Grabando recorrido GPS. Para esta primera prueba, mantén la app abierta y la pantalla activa.');
+ gpsDrawTrack();gpsPersistDraft();gpsUpdateStatus(MRR_NATIVE?'🔴 Grabando GPS en segundo plano. Puedes bloquear el móvil; mantén visible la notificación de Mallorca Riders.':'🔴 Grabando recorrido GPS. Mantén la app abierta y la pantalla activa.');
 }
-function gpsStartRecording(){
- if(gpsRecording)return;if(!navigator.geolocation){gpsUpdateStatus('❌ Este navegador no permite acceder al GPS.');return}
+async function gpsStartRecording(){
+ if(gpsRecording)return;
+ if(!MRR_NATIVE&&!navigator.geolocation){gpsUpdateStatus('❌ Este navegador no permite acceder al GPS.');return}
  if(gpsTrack.length){if(!confirm('Hay una grabación anterior sin guardar. ¿Quieres descartarla y empezar otra?'))return;gpsDiscardRecording()}
  gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=Date.now();gpsRecording=true;gpsPersistDraft();gpsUpdateStatus('⏳ Esperando señal GPS…');
- try{gpsWatchId=navigator.geolocation.watchPosition(gpsAcceptPosition,e=>{gpsUpdateStatus('❌ '+locationErrorMessage(e)+' La grabación se ha detenido.');gpsStopRecording()},{enableHighAccuracy:true,maximumAge:3000,timeout:20000})}
- catch(e){gpsRecording=false;gpsWatchId=null;gpsUpdateStatus('❌ No se pudo iniciar el GPS: '+(e.message||'error'))}
+ try{
+  if(MRR_NATIVE){
+   gpsNativeWatchId=await window.MRRNativeGPS.addWatcher({backgroundMessage:'Mallorca Riders está grabando tu ruta. Pulsa para volver a la app.',backgroundTitle:'Mallorca Riders · Grabación activa',requestPermissions:true,stale:false,distanceFilter:5},(location,error)=>{
+    if(error){gpsUpdateStatus('❌ Error del GPS: '+(error.message||error.code||'desconocido'));return}
+    if(location)gpsAcceptPosition({coords:{latitude:location.latitude,longitude:location.longitude,accuracy:location.accuracy},timestamp:location.time});
+   });
+   gpsUpdateStatus('🔴 Grabación GPS nativa activa. Puedes bloquear el móvil; no cierres la app a la fuerza.');
+  }else{
+   gpsWatchId=navigator.geolocation.watchPosition(gpsAcceptPosition,e=>{gpsUpdateStatus('❌ '+locationErrorMessage(e)+' La grabación se ha detenido.');gpsStopRecording()},{enableHighAccuracy:true,maximumAge:3000,timeout:20000});
+  }
+ }catch(e){gpsRecording=false;gpsWatchId=null;gpsNativeWatchId=null;gpsPersistDraft();gpsUpdateStatus('❌ No se pudo iniciar el GPS: '+(e.message||'error'))}
 }
-function gpsStopRecording(){if(gpsWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null;gpsRecording=false;gpsPersistDraft();gpsUpdateStatus(gpsTrack.length>1?'⏸️ Grabación detenida. Ya puedes guardar el recorrido.':'⚠️ Aún no hay suficientes posiciones GPS para guardar una ruta.')}
+async function gpsStopRecording(){
+ if(gpsNativeWatchId!==null&&window.MRRNativeGPS){try{await window.MRRNativeGPS.removeWatcher(gpsNativeWatchId)}catch(e){console.warn('No se pudo detener el GPS nativo',e)}}
+ if(gpsWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(gpsWatchId);
+ gpsNativeWatchId=null;gpsWatchId=null;gpsRecording=false;gpsPersistDraft();gpsUpdateStatus(gpsTrack.length>1?'⏸️ Grabación detenida. Ya puedes guardar el recorrido.':'⚠️ Aún no hay suficientes posiciones GPS para guardar una ruta.');
+}
 function gpsDiscardRecording(){
  if(gpsRecording)gpsStopRecording();gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;
  if(gpsTrackLine&&map)map.removeLayer(gpsTrackLine);if(gpsTrackMarker&&map)map.removeLayer(gpsTrackMarker);gpsTrackLine=null;gpsTrackMarker=null;
@@ -820,7 +837,7 @@ async function findRealStops(coords,stop){
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),50000);
     let elements;
     try{
-      const res=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
+      const res=await fetch(apiUrl('/api/overpass'),{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal});
       if(!res.ok){
         let detail='';
         try{const errData=await res.json();detail=errData.detail||errData.error||''}catch(_){}
@@ -1106,7 +1123,7 @@ function updateRoadworksUI(){
 }
 function refreshRoadworksForRoute(){
   if(!current?.shape?.length)return Promise.resolve();
-  return fetch('/api/traffic/incidents',{method:'GET',headers:{Accept:'application/xml'},cache:'no-store'})
+  return fetch(apiUrl('/api/traffic/incidents'),{method:'GET',headers:{Accept:'application/xml'},cache:'no-store'})
     .then(async response=>{
       if(!response.ok){
         let detail='';
@@ -1587,7 +1604,7 @@ async function share(){
 
 function getSharedRouteShareLinks(route=current){
   if(!route?.sharedRouteId)return null;
-  const shareUrl=new URL(window.location.href);
+  const shareUrl=new URL(MRR_NATIVE?'https://mallorca-riders-proxy-test.i-riveraseguro.workers.dev/':window.location.href);
   shareUrl.hash=new URLSearchParams({shared:route.sharedRouteId}).toString();
   const url=shareUrl.toString();
   const details=[route.km||'',route.duration||''].filter(Boolean).join(' · ');
@@ -2030,7 +2047,7 @@ async function loadGoogleMapsLink(){
   try{
     let decoded=decodeURIComponent(raw);
     if(/^(maps\.app\.goo\.gl|goo\.gl)$/i.test(inputUrl.hostname)){
-      const response=await fetch('/api/resolve-google?url='+encodeURIComponent(inputUrl.href),{headers:{Accept:'application/json'}});
+      const response=await fetch(apiUrl('/api/resolve-google?url='+encodeURIComponent(inputUrl.href)),{headers:{Accept:'application/json'}});
       const payload=await response.json();
       if(!response.ok||!payload.url)throw new Error(payload.error||'Google Maps no ha permitido resolver este enlace.');
       decoded=decodeURIComponent(payload.url);
