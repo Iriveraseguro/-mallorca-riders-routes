@@ -1115,7 +1115,7 @@ async function loadSharedRoute(){
 function xmlEscape(value){
   return String(value??'').replace(/[<>&"']/g,ch=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[ch]));
 }
-async async function downloadCurrentGPX(){
+async function downloadCurrentGPX(){
   if(!current?.shape||current.shape.length<2){
     alert('Primero genera o abre una ruta con trazado.');
     return;
