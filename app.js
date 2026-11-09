@@ -2047,7 +2047,7 @@ async function loadGoogleMapsLink(){
   try{
     let decoded=decodeURIComponent(raw);
     if(/^(maps\.app\.goo\.gl|goo\.gl)$/i.test(inputUrl.hostname)){
-      const response=await fetch(apiUrl('/api/resolve-google?url='+encodeURIComponent(inputUrl.href),{headers:{Accept:'application/json'}});
+      const response=await fetch(apiUrl('/api/resolve-google?url='+encodeURIComponent(inputUrl.href)),{headers:{Accept:'application/json'}});
       const payload=await response.json();
       if(!response.ok||!payload.url)throw new Error(payload.error||'Google Maps no ha permitido resolver este enlace.');
       decoded=decodeURIComponent(payload.url);
