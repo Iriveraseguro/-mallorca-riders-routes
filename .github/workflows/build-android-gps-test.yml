@@ -1,0 +1,77 @@
+name: Build Mallorca Riders Android GPS test APK
+
+on:
+  push:
+    branches:
+      - feature/android-gps-recorder-test
+    paths:
+      - 'app.js'
+      - 'index.html'
+      - 'styles.css'
+      - 'assets/**'
+      - 'native-entry.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.json'
+      - '.github/workflows/build-android-gps-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prepare app assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp index.html styles.css dist/
+          cp -R assets dist/assets
+          cp manifest.webmanifest dist/
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('dist/index.html')
+          s = p.read_text()
+          s = s.replace('<script src="app.js?v=84"></script>', '<script src="app.js"></script>')
+          s = s.replace('<script>if(\'serviceWorker\' in navigator){window.addEventListener(\'load\',()=>navigator.serviceWorker.register(\'./sw.js\').catch(err=>console.warn(\'Service worker:\',err)));}</script>', '')
+          p.write_text(s)
+          PY
+          npm run build
+
+      - name: Add Android platform and sync plugins
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - name: Upload test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mallorca-riders-android-gps-test
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
