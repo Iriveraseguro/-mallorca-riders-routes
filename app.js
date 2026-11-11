@@ -1,4 +1,5 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
+let destinationWaypoints=[],destinationMarkers=[];
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -357,6 +358,11 @@ function initApp(){
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('refreshApp').onclick=refreshApplication;
+  $('gpsStartRecording').onclick=gpsStartRecording;
+  $('gpsStopRecording').onclick=gpsStopRecording;
+  $('gpsSaveRecording').onclick=gpsSaveRecording;
+  $('gpsDiscardRecording').onclick=()=>{if(confirm('¿Descartar el recorrido GPS grabado?'))gpsDiscardRecording()};
+  gpsRestoreDraft();
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
   updateRegionUI();
@@ -676,7 +682,10 @@ async function requestRoute(locations,plan){
     units:'kilometers',
     format:'osrm',
     shape_format:'geojson',
-    directions_type:'none',
+    directions_type:'instructions',
+    language:'es-ES',
+    banner_instructions:true,
+    voice_instructions:true,
     costing_options:{
       motorcycle:{
         exclude_ferries:true,
@@ -716,6 +725,300 @@ async function requestRoute(locations,plan){
   if(ISLANDS[plan.region]&&!routeShapeIsInRegion(coords,plan.region,boundary))throw new Error('ROUTE_LEFT_ISLAND');
   return {data,coords,summary:{lengthKm:summary.distance,timeSec:summary.duration}};
 }
+
+// Navegación por voz y avisos de seguridad en ruta (mejor esfuerzo en segundo plano en iOS).
+let navigationWatchId=null,navigationCues=[],navigationAnnouncedFar=new Set(),navigationAnnouncedNear=new Set(),navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[],navigationHazards=[],navigationHazardMarkers=[],navigationLastHazardAlerts=new Set(),navigationManeuverMarkers=[];
+function speakNavigation(message){
+  if(!('speechSynthesis' in window)||!message)return;
+  try{window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(message);utterance.lang='es-ES';utterance.rate=1;utterance.volume=1;window.speechSynthesis.speak(utterance)}catch(error){console.warn('No se pudo reproducir la indicación de voz',error)}
+}
+function routeCumulative(shape){
+  const cumulative=[0];
+  for(let i=1;i<shape.length;i++)cumulative[i]=cumulative[i-1]+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:shape[i][0],lon:shape[i][1]});
+  return cumulative;
+}
+function bearingBetween(a,b){
+  const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+  return (Math.atan2(Math.sin(dl)*Math.cos(p2),Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl))*180/Math.PI+360)%360;
+}
+function buildNavigationCues(shape){
+  const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0,cues=[];
+  const at=d=>{let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;return [shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f]};
+  for(let d=0.18;d<total-0.18;d+=0.10){
+    const before=at(Math.max(0,d-0.16)),pivot=at(d),after=at(Math.min(total,d+0.16));
+    const incoming=bearingBetween(before,pivot),outgoing=bearingBetween(pivot,after);
+    const angle=((outgoing-incoming+540)%360)-180;
+    if(Math.abs(angle)<42)continue;
+    const last=cues[cues.length-1];if(last&&d-last.distance<0.30)continue;
+    cues.push({distance:d,text:Math.abs(angle)>145?'Giro muy cerrado; reduce la velocidad':angle>0?'Gira a la derecha':'Gira a la izquierda'});
+  }
+  return {cues,cumulative,total};
+}
+function routePointAtDistance(shape,cumulative,distance){
+  const target=Math.max(0,Math.min(cumulative[cumulative.length-1]||0,distance));
+  let i=1;while(i<cumulative.length-1&&cumulative[i]<target)i++;
+  const span=cumulative[i]-cumulative[i-1],f=span?(target-cumulative[i-1])/span:0;
+  return [shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f];
+}
+function maneuverLabel(step){
+  const m=step?.maneuver||{},type=String(m.type||'').toLowerCase(),modifier=String(m.modifier||'').toLowerCase();
+  if(type.includes('roundabout')||type.includes('rotary'))return {text:'En la rotonda, '+(m.exit?'toma la salida '+m.exit:'sigue la salida indicada'),icon:'🔄'};
+  if(type.includes('arrive'))return {text:'Has llegado a tu destino',icon:'🏁'};
+  if(type.includes('depart'))return {text:'Comienza la ruta',icon:'🏍️'};
+  if(type.includes('merge')||type.includes('fork'))return {text:'Mantente '+(modifier.includes('left')?'a la izquierda':modifier.includes('right')?'a la derecha':'en el carril indicado'),icon:modifier.includes('left')?'⬅️':'➡️'};
+  if(modifier.includes('uturn'))return {text:'Haz un cambio de sentido',icon:'↩️'};
+  if(modifier.includes('sharp right'))return {text:'Giro cerrado a la derecha',icon:'↱'};
+  if(modifier.includes('slight right'))return {text:'Gira ligeramente a la derecha',icon:'↗️'};
+  if(modifier.includes('right'))return {text:'Gira a la derecha',icon:'➡️'};
+  if(modifier.includes('sharp left'))return {text:'Giro cerrado a la izquierda',icon:'↰'};
+  if(modifier.includes('slight left'))return {text:'Gira ligeramente a la izquierda',icon:'↖️'};
+  if(modifier.includes('left'))return {text:'Gira a la izquierda',icon:'⬅️'};
+  if(type.includes('continue')||type.includes('new name'))return {text:'Continúa recto',icon:'⬆️'};
+  return null;
+}
+function buildManeuverCues(route){
+  const cues=[];let offset=0;
+  for(const leg of (route?.legs||[])){
+    for(const step of (leg.steps||[])){
+      const stepDistance=Math.max(0,Number(step.distance)||0)/1000;
+      const voices=step.voiceInstructions||step.voice_instructions||[];
+      if(voices.length){
+        voices.forEach(voice=>{
+          const raw=Number(voice.distanceAlongGeometry??voice.distance_along_geometry);
+          const along=Number.isFinite(raw)?Math.max(0,Math.min(stepDistance,raw/1000)):0;
+          const text=String(voice.announcement||voice.instruction||'').replace(/<[^>]*>/g,'').trim();
+          if(text)cues.push({distance:offset+along,text,icon:maneuverLabel(step)?.icon||'➡️'});
+        });
+      }else{
+        const label=maneuverLabel(step);
+        if(label&&offset>0)cues.push({distance:offset,text:label.text,icon:label.icon});
+      }
+      offset+=stepDistance;
+    }
+  }
+  const seen=new Set();
+  return cues.sort((a,b)=>a.distance-b.distance).filter(cue=>{
+    const key=Math.round(cue.distance*1000)+'|'+cue.text;
+    if(seen.has(key))return false;seen.add(key);return true;
+  });
+}
+function buildNavigationCues(shape){
+  const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0,cues=[];
+  const at=d=>routePointAtDistance(shape,cumulative,d);
+  for(let d=0.18;d<total-0.18;d+=0.10){
+    const before=at(Math.max(0,d-0.16)),pivot=at(d),after=at(Math.min(total,d+0.16));
+    const incoming=bearingBetween(before,pivot),outgoing=bearingBetween(pivot,after);
+    const angle=((outgoing-incoming+540)%360)-180;
+    if(Math.abs(angle)<42)continue;
+    const last=cues[cues.length-1];if(last&&d-last.distance<0.30)continue;
+    cues.push({distance:d,text:Math.abs(angle)>145?'Giro muy cerrado; reduce la velocidad':angle>0?'Gira a la derecha':'Gira a la izquierda',icon:angle>0?'➡️':'⬅️'});
+  }
+  return {cues,cumulative,total};
+}
+function drawManeuverSigns(cues,shape){
+  navigationManeuverMarkers.forEach(marker=>map?.removeLayer(marker));navigationManeuverMarkers=[];
+  const cumulative=routeCumulative(shape);
+  cues.forEach(cue=>{
+    if(!cue.icon||cue.distance<0.05)return;
+    const point=routePointAtDistance(shape,cumulative,cue.distance);
+    const icon=L.divIcon({className:'navigation-sign-icon',html:'<span>'+cue.icon+'</span>',iconSize:[34,34],iconAnchor:[17,17]});
+    const marker=L.marker(point,{icon,keyboard:false,zIndexOffset:700}).addTo(map);
+    marker.bindTooltip(escapeHtml(cue.text),{direction:'top',sticky:true});
+    navigationManeuverMarkers.push(marker);
+  });
+}
+function nearestRouteProgress(point,shape,cumulative){
+  let best={distance:Infinity,along:0};
+  for(let i=1;i<shape.length;i++){
+    const a=shape[i-1],b=shape[i],lat=(a[0]+b[0])/2*Math.PI/180;
+    const scaleX=111.32*Math.cos(lat),scaleY=110.57;
+    const ax=(a[1]-point.longitude)*scaleX,ay=(a[0]-point.latitude)*scaleY;
+    const bx=(b[1]-point.longitude)*scaleX,by=(b[0]-point.latitude)*scaleY;
+    const dx=bx-ax,dy=by-ay,den=dx*dx+dy*dy;
+    const t=den?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/den)):0;
+    const d=Math.hypot(ax+t*dx,ay+t*dy);
+    if(d<best.distance)best={distance:d,along:cumulative[i-1]+(cumulative[i]-cumulative[i-1])*t};
+  }
+  return best;
+}
+function stopVoiceNavigation(){
+  if(navigationWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(navigationWatchId);
+  navigationWatchId=null;
+  if('speechSynthesis' in window)window.speechSynthesis.cancel();
+  $('voiceNavigate')?.classList.remove('active');
+  if($('mapStatus'))$('mapStatus').textContent='🔇 Navegación por voz detenida.';
+}
+async function startVoiceNavigation(){
+  if(!current?.shape?.length||current.shape.length<2){alert('Primero genera o abre una ruta.');return}
+  if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
+  if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
+  stopVoiceNavigation();
+  const built=buildNavigationCues(current.shape);navigationCues=Array.isArray(current.navigationCues)&&current.navigationCues.length?current.navigationCues:built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();navigationLastHazardAlerts=new Set();
+  speakNavigation('Navegación de Mallorca Riders activada. Sigue la ruta y escucha las indicaciones.');
+  $('voiceNavigate')?.classList.add('active');
+  $('mapStatus').textContent='🗣️ Navegación por voz activa. Mantén la app abierta para que el iPhone siga enviando indicaciones.';
+  navigationWatchId=navigator.geolocation.watchPosition(position=>{
+    const progress=nearestRouteProgress(position.coords,current.shape,built.cumulative);
+    if(progress.distance>0.18){$('mapStatus').textContent='⚠️ Estás lejos de la ruta. Comprueba el recorrido en un lugar seguro.';return}
+    navigationCues.forEach((cue,index)=>{
+      const remaining=(cue.distance-progress.along)*1000;
+      if(remaining<=450&&remaining>140&&!navigationAnnouncedFar.has(index)){speakNavigation('En unos '+Math.max(100,Math.round(remaining/50)*50)+' metros. '+cue.text);navigationAnnouncedFar.add(index)}
+      if(remaining<=140&&remaining>=-35&&!navigationAnnouncedNear.has(index)){speakNavigation(cue.text);navigationAnnouncedNear.add(index)}
+    });
+    navigationHazards.forEach(hazard=>{
+      const key=String(hazard.id),d=distanceKm({lat:position.coords.latitude,lon:position.coords.longitude},{lat:hazard.lat,lon:hazard.lon});
+      if(d<=0.35&&!navigationLastHazardAlerts.has(key)){navigationLastHazardAlerts.add(key);speakNavigation('Atención. Posibles obras o incidencia en la carretera. Reduce la velocidad y sigue la señalización.');}
+    });
+    navigationCameras.forEach(camera=>{
+      const key=String(camera.id),d=distanceKm({lat:position.coords.latitude,lon:position.coords.longitude},{lat:camera.lat,lon:camera.lon});
+      if(d<=0.5&&!navigationLastCameraAlerts.has(key)){navigationLastCameraAlerts.add(key);speakNavigation('Atención. Punto de control de velocidad próximo. Respeta la señalización y el límite de velocidad.')}
+    });
+  },error=>{$('mapStatus').textContent='⚠️ No se puede seguir tu GPS: '+(error.message||'comprueba los permisos')},{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+}
+async function findSpeedCameras(shape){
+  try{
+    const samples=[],cum=routeCumulative(shape),total=cum[cum.length-1]||0;
+    const step=Math.max(1,total/48);
+    for(let d=0;d<=total;d+=step){let i=1;while(i<cum.length-1&&cum[i]<d)i++;const p=shape[i];samples.push([Number(p[0]).toFixed(5),Number(p[1]).toFixed(5)])}
+    const coords=[...new Map(samples.map(p=>[p.join(','),p])).values()];
+    if(!coords.length)return [];
+    const query='[out:json][timeout:20];(node["highway"="speed_camera"](around:500,'+coords.map(p=>p.join(',')).join(',')+'););out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+    let response;try{response=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const data=await response.json();
+    return (data.elements||[]).map(el=>({id:el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:el.tags?.name||'Punto de control de velocidad',source:'OpenStreetMap'})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
+  }catch(error){console.warn('No se pudieron consultar los puntos de control',error);return []}
+}
+async function findRoadHazards(shape){
+  try{
+    const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0;
+    const samples=[],step=Math.max(0.8,total/55);
+    for(let d=0;d<=total;d+=step){
+      const p=routePointAtDistance(shape,cumulative,d);
+      samples.push([Number(p[0]).toFixed(5),Number(p[1]).toFixed(5)]);
+    }
+    const coords=[...new Map(samples.map(p=>[p.join(','),p])).values()];
+    if(!coords.length)return [];
+    const around=coords.map(p=>p.join(',')).join(',');
+    const query='[out:json][timeout:25];(way["highway"="construction"](around:150,'+around+');way["construction"](around:150,'+around+');way["roadwork"](around:150,'+around+');node["highway"="roadwork"](around:150,'+around+');node["barrier"="road_closed"](around:150,'+around+'););out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+    let response;try{response=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const data=await response.json(),seen=new Set();
+    return (data.elements||[]).map(el=>{
+      const tags=el.tags||{},lat=el.lat??el.center?.lat,lon=el.lon??el.center?.lon;
+      const name=tags.name||tags.construction||'Obras o incidencia en la vía';
+      return {id:String(el.id),lat:Number(lat),lon:Number(lon),name,source:'OpenStreetMap'};
+    }).filter(item=>{
+      if(!Number.isFinite(item.lat)||!Number.isFinite(item.lon)||seen.has(item.id))return false;
+      seen.add(item.id);return true;
+    });
+  }catch(error){console.warn('No se pudieron consultar las obras/incidencias',error);return []}
+}
+function drawRoadHazards(hazards){
+  navigationHazardMarkers.forEach(marker=>map?.removeLayer(marker));navigationHazardMarkers=[];
+  hazards.forEach(hazard=>{
+    const icon=L.divIcon({className:'road-hazard-icon',html:'<span>🚧</span>',iconSize:[36,36],iconAnchor:[18,18]});
+    const marker=L.marker([hazard.lat,hazard.lon],{icon,zIndexOffset:900}).addTo(map);
+    marker.bindPopup('<b>🚧 '+escapeHtml(hazard.name)+'</b><br>Incidencia registrada en OpenStreetMap. Comprueba siempre la señalización real.');
+    navigationHazardMarkers.push(marker);
+  });
+}
+function drawSafetyCameras(cameras){
+  navigationCameraMarkers.forEach(marker=>map?.removeLayer(marker));navigationCameraMarkers=[];
+  cameras.forEach(camera=>{
+    const icon=L.divIcon({className:'poi-div-icon',html:'<div class="safety-camera-marker">⚠️</div>',iconSize:[32,32],iconAnchor:[16,16]});
+    const marker=L.marker([camera.lat,camera.lon],{icon}).addTo(map).bindPopup('⚠️ Punto de control de velocidad<br>Dato colaborativo de OpenStreetMap; puede estar incompleto o desactualizado.');
+    navigationCameraMarkers.push(marker);
+  });
+}
+async function reverseCurrentRoute(){
+  if(!current?.shape||current.shape.length<2){alert('Primero genera, importa o abre una ruta.');return}
+  const button=$('reverseRoute');if(button){button.disabled=true;button.textContent='⏳ Recalculando…'}
+  stopVoiceNavigation();
+  try{
+    const shape=current.shape,cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1];
+    const sampleAt=d=>{let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;return {lat:shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,lon:shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f}};
+    const samples=[];for(let d=7;d<total-1;d+=7)samples.push(sampleAt(d));
+    const reversed=[{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]},...samples.reverse(),{lat:shape[0][0],lon:shape[0][1]}];
+    const compact=reversed.filter((p,i)=>i===0||i===reversed.length-1||distanceKm(reversed[i-1],p)>0.5);
+    const detectedRegion=detectIsland({latitude:shape[0][0],longitude:shape[0][1]});
+    const plan={region:detectedRegion||'peninsula',type:current.type||'Mixta'};
+    const result=await requestRoute(compact.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[plan.region]?{exclude_ferry:true}:{}})),plan);
+    const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
+    current={...current,shape:result.coords,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:(current.routePoints||[]).slice().reverse(),direction:current.direction==='inversa'?'normal':'inversa',realStops:current.realStops||[]};
+    current.realStop=current.realStops[0]||null;
+    drawSharedRoute(current);render(current);
+    $('mapStatus').textContent='🔄 Sentido inverso recalculado por carreteras. Revisa la ruta antes de salir.';
+  }catch(error){console.error('No se pudo invertir la ruta',error);alert('No he podido recalcular el sentido inverso por carretera: '+(error.message||'error de conexión'))}
+  finally{if(button){button.disabled=false;button.textContent='↔️ Invertir sentido'}}
+}
+
+async function geocodeDestination(query){
+  const url='https://nominatim.openstreetmap.org/search?'+new URLSearchParams({
+    format:'jsonv2',q:query+', España',countrycodes:'es',limit:'5',addressdetails:'1'
+  }).toString();
+  let response;
+  try{response=await fetch(url,{headers:{'Accept':'application/json'}})}
+  catch(error){throw new Error('No se ha podido conectar con el buscador de lugares. Comprueba la conexión.')}
+  if(!response.ok)throw new Error('El buscador de destinos no responde (HTTP '+response.status+').');
+  const results=await response.json();
+  if(!Array.isArray(results)||!results.length)throw new Error('No he encontrado ese destino en España. Prueba con el nombre del pueblo o añade la isla/provincia.');
+  const place=results[0],lat=Number(place.lat),lon=Number(place.lon);
+  if(!Number.isFinite(lat)||!Number.isFinite(lon))throw new Error('El destino encontrado no tiene coordenadas válidas.');
+  return {name:String(place.name||query),displayName:String(place.display_name||query),lat,lon};
+}
+function refreshDestinationMarkers(){
+  destinationMarkers.forEach((marker,index)=>{
+    const point=destinationWaypoints[index];if(!point)return;
+    marker.setIcon(L.divIcon({className:'destination-stop-icon',html:'<span>'+(index+1)+'</span>',iconSize:[32,32],iconAnchor:[16,16]}));
+    marker.setPopupContent('<b>Parada '+(index+1)+': '+escapeHtml(point.name)+'</b>');
+  });
+  const list=$('destinationStopsList');
+  if(list)list.innerHTML=destinationWaypoints.length?destinationWaypoints.map((p,i)=>'<div class="destination-stop-row"><span><b>'+(i===0?'Salida':(i+1)+'.')+'</b> '+escapeHtml(p.name)+'</span><span class="destination-stop-actions"><button type="button" class="map-button" '+(i===0?'disabled':'')+' onclick="moveDestinationStop('+i+',-1)" aria-label="Subir parada">↑</button><button type="button" class="map-button" '+(i===destinationWaypoints.length-1?'disabled':'')+' onclick="moveDestinationStop('+i+',1)" aria-label="Bajar parada">↓</button><button type="button" class="map-button" onclick="removeDestinationStop('+i+')">Quitar</button></span></div>').join(''):'<small class="note">Todavía no has añadido paradas.</small>';
+}
+window.moveDestinationStop=function(index,delta){
+  const next=index+delta;if(index<0||next<0||index>=destinationWaypoints.length||next>=destinationWaypoints.length)return;
+  [destinationWaypoints[index],destinationWaypoints[next]]=[destinationWaypoints[next],destinationWaypoints[index]];
+  if(destinationMarkers.length===destinationWaypoints.length)[destinationMarkers[index],destinationMarkers[next]]=[destinationMarkers[next],destinationMarkers[index]];
+  refreshDestinationMarkers();
+};
+window.removeDestinationStop=function(index){
+  if(index<0||index>=destinationWaypoints.length)return;
+  destinationWaypoints.splice(index,1);
+  const marker=destinationMarkers.splice(index,1)[0];if(marker&&map)map.removeLayer(marker);
+  refreshDestinationMarkers();
+};
+async function addDestinationStop(){
+  const field=$('destinationText'),query=String(field?.value||'').trim();
+  if(!query){$('mapStatus').textContent='Escribe primero el nombre de un lugar.';return}
+  const button=$('addDestinationStop');if(button){button.disabled=true;button.textContent='Buscando…'}
+  try{
+    if(destinationWaypoints.length)await new Promise(resolve=>setTimeout(resolve,1100));
+    const place=await geocodeDestination(query),region=$('region')?.value||'mallorca';
+    // La isla elegida, no el GPS del teléfono, determina el ámbito de búsqueda.
+    if(ISLANDS[region]&&!pointInBox(place.lat,place.lon,ISLANDS[region].box))throw new Error('«'+place.name+'» no está en '+ISLANDS[region].name+'. Cambia la zona o elige un lugar de esa isla.');
+    if(destinationWaypoints.some(p=>distanceKm(p,place)<0.3))throw new Error('Ese lugar ya está añadido como parada.');
+    destinationWaypoints.push(place);
+    if(!initMap())throw new Error('El mapa todavía no está disponible.');
+    const marker=L.marker([place.lat,place.lon]).addTo(map);
+    marker.bindPopup('<b>'+(destinationWaypoints.length===1?'Salida':'Parada '+destinationWaypoints.length)+': '+escapeHtml(place.name)+'</b>');
+    destinationMarkers.push(marker);refreshDestinationMarkers();
+    map.setView([place.lat,place.lon],Math.max(map.getZoom(),10));
+    field.value='';
+    $('mapStatus').textContent='📍 '+place.name+' añadida. '+(destinationWaypoints.length===1?'Será el punto de salida; añade al menos otro lugar para trazar la ruta.':'Puedes seguir añadiendo lugares sin activar el GPS.');
+  }catch(error){$('mapStatus').textContent='⚠️ '+(error.message||error);alert(error.message||error)}
+  finally{if(button){button.disabled=false;button.textContent='＋ Añadir parada'}}
+}
+$('addDestinationStop')?.addEventListener('click',addDestinationStop);
+$('destinationText')?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();addDestinationStop()}});
+window.clearDestinationStops=function(){
+  destinationWaypoints=[];destinationMarkers.forEach(marker=>map&&map.removeLayer(marker));destinationMarkers=[];refreshDestinationMarkers();
+  $('mapStatus').textContent='Se han borrado las paradas escritas.';
+};
+
+
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
     $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Para no dibujar una ruta en otra zona, importa un enlace/archivo de ruta o pulsa «Marcar puntos manualmente» y coloca al menos 2 puntos sobre el mapa.';
@@ -723,7 +1026,29 @@ async function generateRoute(){
     $('map').scrollIntoView({behavior:'smooth',block:'center'});
     return;
   }
-  const plan=routePlan();if(!plan)return;
+  let plan;
+  const destinationText=String($('destinationText')?.value||'').trim();
+  if(destinationText){
+    await addDestinationStop();
+    if($('destinationText')?.value?.trim())return;
+  }
+  if(destinationWaypoints.length){
+    if(destinationWaypoints.length<2){
+      $('mapStatus').textContent='Añade al menos dos lugares: el primero será la salida y el siguiente el destino.';
+      $('destinationText')?.focus();return;
+    }
+    const ordered=destinationWaypoints.map(p=>({name:p.name,lat:p.lat,lon:p.lon}));
+    const start=ordered[0],targets=ordered.slice(1);
+    const routeKm=ordered.reduce((sum,p,i)=>i?sum+distanceKm(ordered[i-1],p):sum,0);
+    const returnToStart=$('circle').checked;
+    const region=$('region')?.value||'mallorca';
+    plan={start,targets,requestedKm:Math.max(1,routeKm*(returnToStart?1.2:1.1)),
+      requestedMinutes:(parseFloat($('duration').value||'3')||3)*60,
+      curves:Number($('curves').value)||3,type,label:start.name,
+      region,manual:true,destination:true,returnToStart,
+      destinationName:ordered.map(p=>p.name).join(' → '),
+      destinationDisplayName:ordered.map(p=>p.name).join(' → '),allDestinationStops:ordered};
+  }else{plan=routePlan();if(!plan)return null;}
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';
   $('mapStatus').textContent='🧭 Comparando alternativas para acercarnos a los km y duración elegidos…';clearRoute();
   try{
@@ -732,7 +1057,7 @@ async function generateRoute(){
       const filter=ISLANDS[candidate.region]?{exclude_ferry:true}:{};
       const locations=[{lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter}];
       candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
-      if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
+      if(plan.returnToStart||($('circle').checked&&!plan.destination))locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
       const result=await requestRoute(locations,candidate);
       return {result,candidate,score:routeScore(result,candidate)};
     }));
@@ -742,7 +1067,15 @@ async function generateRoute(){
     const {result,candidate:chosen}=valid[0];
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(result.coords);
-    if(!plan.manual){
+    if(plan.destination){
+      destinationMarkers.forEach(marker=>map.removeLayer(marker));destinationMarkers=[];
+      const ordered=plan.allDestinationStops||[{...plan.start},...plan.targets];
+      ordered.forEach((p,i)=>{
+        const marker=L.marker([p.lat,p.lon],{icon:L.divIcon({className:'destination-stop-icon',html:'<span>'+(i+1)+'</span>',iconSize:[32,32],iconAnchor:[16,16]})}).addTo(map).bindPopup((i===0?'🏁 Salida: ':'🏍️ Parada '+(i+1)+': ')+escapeHtml(p.name));
+        routeMarkers.push(marker);
+      });
+      if(plan.returnToStart)routeMarkers.push(L.marker([plan.start.lat,plan.start.lon]).addTo(map).bindPopup('🏁 Regreso al punto de salida'));
+    }else if(!plan.manual){
       chosen.targets.forEach(p=>routeMarkers.push(L.marker([p.lat,p.lon]).addTo(map).bindPopup(`🏍️ ${p.name}`)));
     }
     let realStop=null,realStops=[],poiError=null;
@@ -765,11 +1098,17 @@ async function generateRoute(){
     map.fitBounds(viewBounds,{padding:[30,30]});
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
-    const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
-    current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    const requestedNote=plan.destination?'Recorrido en orden: '+(plan.allDestinationStops||[{...plan.start},...plan.targets]).map(p=>p.name).join(' → ')+(plan.returnToStart?'. Regreso al punto de salida.':'.'):error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
+    navigationCameras=await findSpeedCameras(result.coords);drawSafetyCameras(navigationCameras);
+    navigationHazards=await findRoadHazards(result.coords);drawRoadHazards(navigationHazards);
+    const routeData=result.data?.routes?.[0];
+    const navigationCueList=buildManeuverCues(routeData);
+    if(!navigationCueList.length)navigationCueList.push(...buildNavigationCues(result.coords).cues);
+    drawManeuverSigns(navigationCueList,result.coords);
+     current={id:Date.now(),name:plan.destination?'Ruta: '+plan.destinationName:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:plan.destination?!!plan.returnToStart:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,navigationCues:navigationCueList,roadHazards:navigationHazards,routePoints:plan.destination?(plan.allDestinationStops||[{...plan.start},...plan.targets]).map((p,i)=>({name:p.name||'Parada '+(i+1),lat:p.lat,lon:p.lon})):plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,destination:plan.destination?plan.destinationName:undefined,returnToStart:!!plan.returnToStart};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
-    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
+    $('mapStatus').textContent=plan.destination?`🏍️ Ruta con ${plan.targets.length} parada(s): ${plan.destinationName}: ${km} km · ${duration}. ${plan.returnToStart?'Ruta circular':'Ruta lineal'} lista para navegar.${poiStatus}`:`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
   }catch(e){
     console.error('Error al generar ruta:',e);
     const reason=String(e?.message||e||'ERROR_DESCONOCIDO');
@@ -784,10 +1123,94 @@ async function generateRoute(){
     $('mapStatus').textContent=msg;alert(msg);
   }finally{btn.disabled=false;btn.textContent='GENERAR RUTA 🏍️'}
 }
+
+const GPS_DRAFT_KEY='mrr-gps-recording-draft-v1';
+let gpsRecording=false,gpsWatchId=null,gpsTrack=[],gpsStartedAt=null,gpsDistanceMeters=0,gpsTrackLine=null,gpsTrackMarker=null;
+function gpsFormatDuration(ms){const n=Math.max(0,Math.floor(ms/60000)),h=Math.floor(n/60),m=n%60;return h?h+' h '+m+' min':m+' min'}
+function gpsUpdateStatus(message){
+ const el=$('gpsRecordStatus');if(el)el.textContent=message;
+ const start=$('gpsStartRecording'),stop=$('gpsStopRecording'),saveButton=$('gpsSaveRecording'),discard=$('gpsDiscardRecording');
+ if(start)start.disabled=gpsRecording;if(stop)stop.disabled=!gpsRecording;
+ if(saveButton)saveButton.disabled=gpsRecording||gpsTrack.length<2;
+ if(discard)discard.disabled=gpsRecording||gpsTrack.length===0;
+ const stats=$('gpsRecordStats');if(stats){const elapsed=gpsStartedAt?Date.now()-gpsStartedAt:(gpsTrack.length?Date.now()-(gpsTrack[0][2]||Date.now()):0);stats.textContent=(gpsDistanceMeters/1000).toFixed(1).replace('.',',')+' km · '+gpsFormatDuration(elapsed)+' · '+gpsTrack.length+' posiciones'}
+}
+function gpsPersistDraft(){try{localStorage.setItem(GPS_DRAFT_KEY,JSON.stringify({points:gpsTrack.slice(-12000),startedAt:gpsStartedAt,distanceMeters:gpsDistanceMeters}))}catch(e){console.warn('No se pudo guardar el borrador GPS',e);gpsUpdateStatus('⚠️ No hay espacio suficiente en este dispositivo para guardar el recorrido.')}}
+function gpsRestoreDraft(){
+ try{const d=JSON.parse(localStorage.getItem(GPS_DRAFT_KEY)||'null');if(!d||!Array.isArray(d.points)||!d.points.length)return;
+ gpsTrack=d.points.filter(p=>Array.isArray(p)&&p.length>=3&&Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1])));
+ gpsStartedAt=Number(d.startedAt)||gpsTrack[0]?.[2]||Date.now();gpsDistanceMeters=Number(d.distanceMeters)||0;
+ if(gpsTrack.length){gpsDrawTrack();gpsUpdateStatus('⏸️ Se ha recuperado una grabación anterior. Puedes guardarla o descartarla.')}
+ }catch(e){console.warn('No se pudo recuperar el borrador GPS',e)}
+}
+function gpsDrawTrack(){
+ if(!map||!gpsTrack.length)return;const coords=gpsTrack.map(p=>[p[0],p[1]]),last=coords[coords.length-1];
+ if(coords.length>1){if(!gpsTrackLine)gpsTrackLine=L.polyline(coords,{color:'#16a34a',weight:6,opacity:.95}).addTo(map);else gpsTrackLine.setLatLngs(coords)}
+ if(!gpsTrackMarker)gpsTrackMarker=L.circleMarker(last,{radius:7,color:'#fff',weight:2,fillColor:'#16a34a',fillOpacity:1}).addTo(map);else gpsTrackMarker.setLatLng(last);
+ if(coords.length===1)map.setView(last,15);else if(gpsRecording)map.panTo(last,{animate:true,duration:.25});else map.fitBounds(L.latLngBounds(coords),{padding:[28,28]});
+}
+function gpsAcceptPosition(p){
+ if(!gpsRecording)return;const c=p.coords;if(!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude))return;
+ if(Number.isFinite(c.accuracy)&&c.accuracy>60){gpsUpdateStatus('📡 Precisión GPS baja ('+Math.round(c.accuracy)+' m). Esperando…');return}
+ const point=[c.latitude,c.longitude,Number(p.timestamp)||Date.now(),Number(c.accuracy)||0],prev=gpsTrack[gpsTrack.length-1];
+ if(prev){const moved=distanceKm({lat:prev[0],lon:prev[1]},{lat:point[0],lon:point[1]})*1000,elapsed=point[2]-(prev[2]||point[2]);
+ if(moved<7&&elapsed<15000)return;if(moved>1000&&elapsed<5000){gpsUpdateStatus('⚠️ Salto GPS descartado; esperando señal estable…');return}gpsDistanceMeters+=moved}
+ gpsTrack.push(point);if(gpsTrack.length>12000)gpsTrack=gpsTrack.filter((_,i)=>i===0||i%2===0);
+ gpsDrawTrack();gpsPersistDraft();gpsUpdateStatus('🔴 Grabando recorrido GPS. Para esta primera prueba, mantén la app abierta y la pantalla activa.');
+}
+function gpsStartRecording(){
+ if(gpsRecording)return;if(!navigator.geolocation){gpsUpdateStatus('❌ Este navegador no permite acceder al GPS.');return}
+ if(gpsTrack.length){if(!confirm('Hay una grabación anterior sin guardar. ¿Quieres descartarla y empezar otra?'))return;gpsDiscardRecording()}
+ gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=Date.now();gpsRecording=true;gpsPersistDraft();gpsUpdateStatus('⏳ Esperando señal GPS…');
+ try{gpsWatchId=navigator.geolocation.watchPosition(gpsAcceptPosition,e=>{gpsUpdateStatus('❌ '+locationErrorMessage(e)+' La grabación se ha detenido.');gpsStopRecording()},{enableHighAccuracy:true,maximumAge:3000,timeout:20000})}
+ catch(e){gpsRecording=false;gpsWatchId=null;gpsUpdateStatus('❌ No se pudo iniciar el GPS: '+(e.message||'error'))}
+}
+function gpsStopRecording(){if(gpsWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null;gpsRecording=false;gpsPersistDraft();gpsUpdateStatus(gpsTrack.length>1?'⏸️ Grabación detenida. Ya puedes guardar el recorrido.':'⚠️ Aún no hay suficientes posiciones GPS para guardar una ruta.')}
+function gpsDiscardRecording(){
+ if(gpsRecording)gpsStopRecording();gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;
+ if(gpsTrackLine&&map)map.removeLayer(gpsTrackLine);if(gpsTrackMarker&&map)map.removeLayer(gpsTrackMarker);gpsTrackLine=null;gpsTrackMarker=null;
+ try{localStorage.removeItem(GPS_DRAFT_KEY)}catch(_){}gpsUpdateStatus('Grabación descartada. Puedes empezar otra cuando quieras.')
+}
+async function gpsSaveRecording(){
+ if(gpsRecording){alert('Detén la grabación antes de guardarla.');return}if(gpsTrack.length<2){alert('Necesitas al menos dos posiciones GPS.');return}
+ const name=String($('gpsRouteName')?.value||'').trim()||('Ruta GPS '+new Date(gpsStartedAt||Date.now()).toLocaleDateString('es-ES'));
+ const shape=gpsTrack.map(p=>[Number(p[0]),Number(p[1])]),km=gpsDistanceMeters/1000;
+ const durationMs=Math.max(0,(gpsTrack[gpsTrack.length-1][2]||Date.now())-(gpsStartedAt||gpsTrack[0][2]||Date.now()));
+ const region=detectIsland({latitude:shape[0][0],longitude:shape[0][1]})||$('region').value||'mallorca';
+ current={id:Date.now(),name,km:km.toFixed(1).replace('.',',')+' km',duration:gpsFormatDuration(durationMs),curves:3,stop:'none',realStop:null,realStops:[],poiError:null,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Grabación GPS',type:'Mixta',shape,recordedShape:shape.map(p=>p.slice()),routePoints:[],region,start:'Grabación GPS',requestedKm:km,requestedDuration:durationMs/60000,requestedNote:'Recorrido registrado directamente por GPS; '+gpsTrack.length+' posiciones.',recordedGps:true};
+ clearRoute();routeLine=L.polyline(shape,{weight:6,opacity:.95,color:'#16a34a'}).addTo(map);addDirectionalArrows(shape);map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+ gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;try{localStorage.removeItem(GPS_DRAFT_KEY)}catch(_){}
+ gpsUpdateStatus('✅ Recorrido preparado. Guardándolo en «Mis rutas»…');render(current);await save();gpsUpdateStatus('✅ Ruta GPS guardada en «Mis rutas» en este dispositivo.');$('result')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function convertRecordedTrack(){
+ if(!current?.recordedGps&&!current?.isRecordedTrack){alert('Abre primero un recorrido grabado.');return}
+ const original=current.recordedShape||current.shape;if(!Array.isArray(original)||original.length<2){alert('La grabación no contiene suficientes puntos GPS.');return}
+ const button=document.querySelector('[onclick="convertRecordedTrack()"]');if(button){button.disabled=true;button.textContent='⏳ Ajustando a carreteras…'}
+ try{
+  const cumulative=routeCumulative(original),total=cumulative[cumulative.length-1]||0,step=Math.max(2,total/16),samples=[{lat:original[0][0],lon:original[0][1]}];
+  for(let d=step;d<total-0.5;d+=step){let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;samples.push({lat:original[i-1][0]+(original[i][0]-original[i-1][0])*f,lon:original[i-1][1]+(original[i][1]-original[i-1][1])*f})}
+  samples.push({lat:original[original.length-1][0],lon:original[original.length-1][1]});
+  const region=detectIsland({latitude:original[0][0],longitude:original[0][1]})||'peninsula';
+  const result=await requestRoute(samples.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[region]?{exclude_ferry:true}:{}})),{region,type:current.type||'Mixta'});
+  const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60),cues=buildManeuverCues(result.data?.routes?.[0]);
+  current={...current,shape:result.coords,recordedShape:original.map(p=>p.slice()),recordedGps:true,convertedFromRecording:true,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:samples.slice(1,-1).map((p,i)=>({name:'Punto de trazado '+(i+1),lat:p.lat,lon:p.lon})),navigationCues:cues.length?cues:buildNavigationCues(result.coords).cues,requestedNote:'Ruta ajustada a carreteras a partir de una grabación GPS. El trazado original se conserva para futuras conversiones.'};
+  if(gpsTrackLine&&map)map.removeLayer(gpsTrackLine);if(gpsTrackMarker&&map)map.removeLayer(gpsTrackMarker);gpsTrackLine=null;gpsTrackMarker=null;
+  drawSharedRoute(current);render(current);$('mapStatus').textContent='✅ Grabación convertida en ruta por carreteras. La grabación original se conserva.';
+ }catch(error){console.error('No se pudo convertir la grabación',error);alert('No se pudo convertir la grabación: '+(error.message||'error de conexión'))}
+ finally{if(button){button.disabled=false;button.textContent='🛣️ Convertir grabación en ruta'}}
+}
+document.addEventListener('visibilitychange',()=>{if(gpsRecording&&document.hidden){gpsPersistDraft();gpsUpdateStatus('⚠️ La app ha pasado a segundo plano. El sistema puede suspender el GPS; para esta primera prueba mantén la pantalla activa.')}});
+
 $('generate').onclick=generateRoute;
 
 
 function render(r){
+  if(Array.isArray(r.shape)&&r.shape.length>1){
+    const cues=Array.isArray(r.navigationCues)&&r.navigationCues.length?r.navigationCues:buildNavigationCues(r.shape).cues;
+    drawManeuverSigns(cues,r.shape);
+    navigationHazards=Array.isArray(r.roadHazards)?r.roadHazards:[];
+    drawRoadHazards(navigationHazards);
+  }
   $('result').classList.remove('hidden');
   const sharedActions=r.sharedRouteId
     ? '<button class="secondary" onclick="editSharedRoute()">✏️ Proponer cambios</button><button class="secondary" onclick="publishSharedRouteUpdate()">💾 Guardar cambios para todos</button><button class="secondary" onclick="showSharedRouteHistory()">🕘 Versiones anteriores</button>'
@@ -808,6 +1231,9 @@ function render(r){
   }
   $('result').innerHTML=
     '<h2>🏍️ '+escapeHtml(r.name)+'</h2>'+
+    (r.direction==='inversa'?'<div class="warning">↩️ Sentido inverso</div>':'')+
+    (navigationCameras.length?'<div class="warning">⚠️ '+navigationCameras.length+' puntos de control encontrados en OpenStreetMap. Datos colaborativos: pueden faltar ubicaciones o estar desactualizados; respeta siempre la señalización.</div>':'')+
+    (navigationHazards.length?'<div class="warning">🚧 '+navigationHazards.length+' posibles obras o incidencias señaladas en OpenStreetMap. Confirma siempre la situación real en carretera.</div>':'')+
     '<small>📍 '+(r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region))+
     ' · Creada por '+escapeHtml(r.createdBy||'un motero')+
     ' · '+(r.circular?'ruta circular':'ruta lineal')+
@@ -819,10 +1245,15 @@ function render(r){
     '</div>'+
     '<div class="stop">'+(r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.'))))+'</div>'+
     '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div>'+
+    '<div class="note">🗣️ Las indicaciones usan maniobras de la ruta. Los avisos de obras dependen de datos colaborativos de OpenStreetMap: pueden faltar o no estar actualizados.</div>'+
     '<div class="actions">'+sharedActions+
+      ((r.recordedGps||r.isRecordedTrack)?'<button class="secondary" onclick="convertRecordedTrack()">🛣️ Convertir grabación en ruta</button>':'')+
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
       '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
+      '<button class="secondary" id="reverseRoute" onclick="reverseCurrentRoute()">↔️ Invertir sentido</button>'+
+      '<button class="secondary" id="voiceNavigate" onclick="startVoiceNavigation()">🗣️ Iniciar navegación por voz</button>'+
+      '<button class="secondary" onclick="stopVoiceNavigation()">🔇 Detener voz</button>'+
       '<button class="secondary" onclick="document.getElementById(\'generate\').click()">🔄 Otra ruta</button>'+
     '</div>'+
     sharePanel;
@@ -831,7 +1262,7 @@ function render(r){
 function get(){return JSON.parse(localStorage.getItem('mrr')||'[]')}
 async function save(){if(!current){alert('Primero genera una ruta.');return}let a=get();a.unshift(current);localStorage.setItem('mrr',JSON.stringify(a.slice(0,50)));list();if(!sbClient||!sbSession){$('authStatus').textContent='Ruta guardada en este dispositivo. Inicia sesión para guardarla también en la nube.';return}try{const km=Number(String(current.km||'0').replace(/[^0-9.,]/g,'').replace(',','.'))||0;const durationMatch=String(current.duration||'').match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*min)?/i);const minutes=durationMatch?(Number(durationMatch[1]||0)*60+Number(durationMatch[2]||0)):0;const payload={user_id:sbSession.user.id,name:String(current.name||'Ruta'),description:String(current.requestedNote||''),region:current.region||'mallorca',route_type:current.type||'Mixta',distance_km:km,duration_minutes:minutes,route_data:current,is_public:false};const {error}=await sbClient.from('routes').insert(payload);if(error)throw error;$('authStatus').textContent='✅ Ruta guardada en este dispositivo y en tu cuenta.'}catch(e){console.error('Error guardando ruta en Supabase',e);$('authStatus').textContent='La ruta está guardada en este dispositivo, pero no se pudo guardar en la nube: '+(e.message||'error de conexión')}}
 function list(){let a=get();$('count').textContent=a.length;if(!a.length){$('saved').innerHTML='Todavía no has guardado ninguna ruta.';return}$('saved').innerHTML=a.map((r,i)=>`<div class="saved"><div><b>🏍️ ${escapeHtml(r.name||'Ruta')}</b><br><small>${escapeHtml(r.km||'')} · ${escapeHtml(r.duration||'')} · ${escapeHtml(r.type||type)}</small></div><button onclick="repeat(${i})">Repetir</button></div>`).join('')}
-function repeat(i){current=get()[i];render(current)}
+function repeat(i){current=get()[i];if(current?.shape?.length)drawSharedRoute(current);render(current)}
 function encodePolyline6(coords){
   let lastLat=0,lastLon=0,out='';
   const encodeValue=value=>{
@@ -917,6 +1348,7 @@ async function copySharedRouteLink(){
 function drawSharedRoute(route){
   if(!map||!Array.isArray(route?.shape)||route.shape.length<2)return;
   clearRoute();
+  findSpeedCameras(route.shape).then(cameras=>{if(current?.shape===route.shape){navigationCameras=cameras;drawSafetyCameras(cameras);render(current)}});
   routeLine=L.polyline(route.shape,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(route.shape);
   (route.routePoints||[]).forEach((p,i)=>{
     const marker=L.marker([p.lat,p.lon]).addTo(map).bindPopup('🏍️ '+escapeHtml(p.name||('Punto '+(i+1))));

@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/poi-arrows-overpass-repair-20261030
+      - feature/voz-radares-ruta-inversa
+      - feature/mrr-logo-splash-test
+      - feature/navegacion-voz-inteligente
   workflow_dispatch:
 
 permissions:
@@ -24,8 +27,11 @@ jobs:
           test -s app.js
           test -s worker.js
           test -s styles.css
+          test -s splash.js
+          test -s splash.css
           node --check app.js
           node --check worker.js
+          node --check splash.js
 
       - name: Deploy test Worker with free Overpass.ch key
         if: ${{ env.OVERPASS_API_KEY != '' }}

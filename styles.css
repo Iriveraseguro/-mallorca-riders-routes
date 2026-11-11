@@ -39,3 +39,29 @@
   .screenshot-overlay-buttons{grid-template-columns:repeat(3,minmax(0,1fr))}
   .screenshot-overlay-buttons .map-button{font-size:12px}
 }
+
+.safety-camera-marker{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#f59e0b;border:2px solid #fff;box-shadow:0 2px 8px #0009;font-size:18px}.route-direction-arrow{color:#1683ff}
+
+
+/* Indicaciones de maniobra y alertas de obras en el mapa. */
+.navigation-sign-icon,.road-hazard-icon{background:transparent!important;border:0!important}
+.navigation-sign-icon span{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:#fff;color:#111;border:2px solid #1683ff;box-shadow:0 2px 8px #0008;font-size:20px;font-weight:900}
+.road-hazard-icon span{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:#f59e0b;border:2px solid #fff;box-shadow:0 2px 8px #0009;font-size:21px}
+
+/* Destination stop planner and GPS track controls */
+.destination-stops-list{display:grid;gap:6px;margin:8px 0 12px}
+.destination-stop-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border,#d5dbe5);border-radius:10px;background:var(--surface,#fff)}
+.destination-stop-icon span{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#1769d2;color:#fff;border:2px solid #fff;font-weight:800;box-shadow:0 1px 6px #0005}
+
+.gps-recorder-card{border:1px solid var(--border,#d5dbe5)}
+.gps-recorder-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.gps-record-stats{font-weight:700;font-variant-numeric:tabular-nums}
+.gps-record-warning{font-size:.85rem;color:#9a5b12;background:#fff7e6;border-radius:10px;padding:10px}
+
+.destination-stop-actions{display:flex;gap:4px;align-items:center}.destination-stop-actions button{padding:6px 9px;min-width:34px}
+
+/* Improve contrast in the white written-destination stop list */
+.destination-stop-row{color:#172033;background:#fff;border-color:#cbd5e1}
+.destination-stop-row>span:first-child{color:#172033;font-weight:600}
+.destination-stops-list .note{color:#475569;font-weight:500}
+.destination-stop-actions button:disabled{opacity:.45}
