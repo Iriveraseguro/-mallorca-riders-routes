@@ -676,7 +676,10 @@ async function requestRoute(locations,plan){
     units:'kilometers',
     format:'osrm',
     shape_format:'geojson',
-    directions_type:'none',
+    directions_type:'instructions',
+    language:'es-ES',
+    banner_instructions:true,
+    voice_instructions:true,
     costing_options:{
       motorcycle:{
         exclude_ferries:true,
@@ -718,7 +721,7 @@ async function requestRoute(locations,plan){
 }
 
 // Navegación por voz y avisos de seguridad en ruta (mejor esfuerzo en segundo plano en iOS).
-let navigationWatchId=null,navigationCues=[],navigationAnnouncedFar=new Set(),navigationAnnouncedNear=new Set(),navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[];
+let navigationWatchId=null,navigationCues=[],navigationAnnouncedFar=new Set(),navigationAnnouncedNear=new Set(),navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[],navigationHazards=[],navigationHazardMarkers=[],navigationLastHazardAlerts=new Set(),navigationManeuverMarkers=[];
 function speakNavigation(message){
   if(!('speechSynthesis' in window)||!message)return;
   try{window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(message);utterance.lang='es-ES';utterance.rate=1;utterance.volume=1;window.speechSynthesis.speak(utterance)}catch(error){console.warn('No se pudo reproducir la indicación de voz',error)}
@@ -744,6 +747,79 @@ function buildNavigationCues(shape){
     cues.push({distance:d,text:Math.abs(angle)>145?'Giro muy cerrado; reduce la velocidad':angle>0?'Gira a la derecha':'Gira a la izquierda'});
   }
   return {cues,cumulative,total};
+}
+function routePointAtDistance(shape,cumulative,distance){
+  const target=Math.max(0,Math.min(cumulative[cumulative.length-1]||0,distance));
+  let i=1;while(i<cumulative.length-1&&cumulative[i]<target)i++;
+  const span=cumulative[i]-cumulative[i-1],f=span?(target-cumulative[i-1])/span:0;
+  return [shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f];
+}
+function maneuverLabel(step){
+  const m=step?.maneuver||{},type=String(m.type||'').toLowerCase(),modifier=String(m.modifier||'').toLowerCase();
+  if(type.includes('roundabout')||type.includes('rotary'))return {text:'En la rotonda, '+(m.exit?'toma la salida '+m.exit:'sigue la salida indicada'),icon:'🔄'};
+  if(type.includes('arrive'))return {text:'Has llegado a tu destino',icon:'🏁'};
+  if(type.includes('depart'))return {text:'Comienza la ruta',icon:'🏍️'};
+  if(type.includes('merge')||type.includes('fork'))return {text:'Mantente '+(modifier.includes('left')?'a la izquierda':modifier.includes('right')?'a la derecha':'en el carril indicado'),icon:modifier.includes('left')?'⬅️':'➡️'};
+  if(modifier.includes('uturn'))return {text:'Haz un cambio de sentido',icon:'↩️'};
+  if(modifier.includes('sharp right'))return {text:'Giro cerrado a la derecha',icon:'↱'};
+  if(modifier.includes('slight right'))return {text:'Gira ligeramente a la derecha',icon:'↗️'};
+  if(modifier.includes('right'))return {text:'Gira a la derecha',icon:'➡️'};
+  if(modifier.includes('sharp left'))return {text:'Giro cerrado a la izquierda',icon:'↰'};
+  if(modifier.includes('slight left'))return {text:'Gira ligeramente a la izquierda',icon:'↖️'};
+  if(modifier.includes('left'))return {text:'Gira a la izquierda',icon:'⬅️'};
+  if(type.includes('continue')||type.includes('new name'))return {text:'Continúa recto',icon:'⬆️'};
+  return null;
+}
+function buildManeuverCues(route){
+  const cues=[];let offset=0;
+  for(const leg of (route?.legs||[])){
+    for(const step of (leg.steps||[])){
+      const stepDistance=Math.max(0,Number(step.distance)||0)/1000;
+      const voices=step.voiceInstructions||step.voice_instructions||[];
+      if(voices.length){
+        voices.forEach(voice=>{
+          const raw=Number(voice.distanceAlongGeometry??voice.distance_along_geometry);
+          const along=Number.isFinite(raw)?Math.max(0,Math.min(stepDistance,raw/1000)):0;
+          const text=String(voice.announcement||voice.instruction||'').replace(/<[^>]*>/g,'').trim();
+          if(text)cues.push({distance:offset+along,text,icon:maneuverLabel(step)?.icon||'➡️'});
+        });
+      }else{
+        const label=maneuverLabel(step);
+        if(label&&offset>0)cues.push({distance:offset,text:label.text,icon:label.icon});
+      }
+      offset+=stepDistance;
+    }
+  }
+  const seen=new Set();
+  return cues.sort((a,b)=>a.distance-b.distance).filter(cue=>{
+    const key=Math.round(cue.distance*1000)+'|'+cue.text;
+    if(seen.has(key))return false;seen.add(key);return true;
+  });
+}
+function buildNavigationCues(shape){
+  const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0,cues=[];
+  const at=d=>routePointAtDistance(shape,cumulative,d);
+  for(let d=0.18;d<total-0.18;d+=0.10){
+    const before=at(Math.max(0,d-0.16)),pivot=at(d),after=at(Math.min(total,d+0.16));
+    const incoming=bearingBetween(before,pivot),outgoing=bearingBetween(pivot,after);
+    const angle=((outgoing-incoming+540)%360)-180;
+    if(Math.abs(angle)<42)continue;
+    const last=cues[cues.length-1];if(last&&d-last.distance<0.30)continue;
+    cues.push({distance:d,text:Math.abs(angle)>145?'Giro muy cerrado; reduce la velocidad':angle>0?'Gira a la derecha':'Gira a la izquierda',icon:angle>0?'➡️':'⬅️'});
+  }
+  return {cues,cumulative,total};
+}
+function drawManeuverSigns(cues,shape){
+  navigationManeuverMarkers.forEach(marker=>map?.removeLayer(marker));navigationManeuverMarkers=[];
+  const cumulative=routeCumulative(shape);
+  cues.forEach(cue=>{
+    if(!cue.icon||cue.distance<0.05)return;
+    const point=routePointAtDistance(shape,cumulative,cue.distance);
+    const icon=L.divIcon({className:'navigation-sign-icon',html:'<span>'+cue.icon+'</span>',iconSize:[34,34],iconAnchor:[17,17]});
+    const marker=L.marker(point,{icon,keyboard:false,zIndexOffset:700}).addTo(map);
+    marker.bindTooltip(escapeHtml(cue.text),{direction:'top',sticky:true});
+    navigationManeuverMarkers.push(marker);
+  });
 }
 function nearestRouteProgress(point,shape,cumulative){
   let best={distance:Infinity,along:0};
@@ -771,7 +847,7 @@ async function startVoiceNavigation(){
   if(!navigator.geolocation){alert('Este navegador no permite acceder al GPS.');return}
   if(!('speechSynthesis' in window)){alert('Este navegador no ofrece voz del sistema.');return}
   stopVoiceNavigation();
-  const built=buildNavigationCues(current.shape);navigationCues=built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();
+  const built=buildNavigationCues(current.shape);navigationCues=Array.isArray(current.navigationCues)&&current.navigationCues.length?current.navigationCues:built.cues;navigationAnnouncedFar=new Set();navigationAnnouncedNear=new Set();navigationLastCameraAlerts=new Set();navigationLastHazardAlerts=new Set();
   speakNavigation('Navegación de Mallorca Riders activada. Sigue la ruta y escucha las indicaciones.');
   $('voiceNavigate')?.classList.add('active');
   $('mapStatus').textContent='🗣️ Navegación por voz activa. Mantén la app abierta para que el iPhone siga enviando indicaciones.';
@@ -782,6 +858,10 @@ async function startVoiceNavigation(){
       const remaining=(cue.distance-progress.along)*1000;
       if(remaining<=450&&remaining>140&&!navigationAnnouncedFar.has(index)){speakNavigation('En unos '+Math.max(100,Math.round(remaining/50)*50)+' metros. '+cue.text);navigationAnnouncedFar.add(index)}
       if(remaining<=140&&remaining>=-35&&!navigationAnnouncedNear.has(index)){speakNavigation(cue.text);navigationAnnouncedNear.add(index)}
+    });
+    navigationHazards.forEach(hazard=>{
+      const key=String(hazard.id),d=distanceKm({lat:position.coords.latitude,lon:position.coords.longitude},{lat:hazard.lat,lon:hazard.lon});
+      if(d<=0.35&&!navigationLastHazardAlerts.has(key)){navigationLastHazardAlerts.add(key);speakNavigation('Atención. Posibles obras o incidencia en la carretera. Reduce la velocidad y sigue la señalización.');}
     });
     navigationCameras.forEach(camera=>{
       const key=String(camera.id),d=distanceKm({lat:position.coords.latitude,lon:position.coords.longitude},{lat:camera.lat,lon:camera.lon});
@@ -803,6 +883,41 @@ async function findSpeedCameras(shape){
     const data=await response.json();
     return (data.elements||[]).map(el=>({id:el.id,lat:el.lat??el.center?.lat,lon:el.lon??el.center?.lon,name:el.tags?.name||'Punto de control de velocidad',source:'OpenStreetMap'})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
   }catch(error){console.warn('No se pudieron consultar los puntos de control',error);return []}
+}
+async function findRoadHazards(shape){
+  try{
+    const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0;
+    const samples=[],step=Math.max(0.8,total/55);
+    for(let d=0;d<=total;d+=step){
+      const p=routePointAtDistance(shape,cumulative,d);
+      samples.push([Number(p[0]).toFixed(5),Number(p[1]).toFixed(5)]);
+    }
+    const coords=[...new Map(samples.map(p=>[p.join(','),p])).values()];
+    if(!coords.length)return [];
+    const around=coords.map(p=>p.join(',')).join(',');
+    const query='[out:json][timeout:25];(way["highway"="construction"](around:150,'+around+');way["construction"](around:150,'+around+');way["roadwork"](around:150,'+around+');node["highway"="roadwork"](around:150,'+around+');node["barrier"="road_closed"](around:150,'+around+'););out center tags;';
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+    let response;try{response=await fetch('/api/overpass',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8',Accept:'application/json'},body:query,signal:controller.signal})}finally{clearTimeout(timer)}
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const data=await response.json(),seen=new Set();
+    return (data.elements||[]).map(el=>{
+      const tags=el.tags||{},lat=el.lat??el.center?.lat,lon=el.lon??el.center?.lon;
+      const name=tags.name||tags.construction||'Obras o incidencia en la vía';
+      return {id:String(el.id),lat:Number(lat),lon:Number(lon),name,source:'OpenStreetMap'};
+    }).filter(item=>{
+      if(!Number.isFinite(item.lat)||!Number.isFinite(item.lon)||seen.has(item.id))return false;
+      seen.add(item.id);return true;
+    });
+  }catch(error){console.warn('No se pudieron consultar las obras/incidencias',error);return []}
+}
+function drawRoadHazards(hazards){
+  navigationHazardMarkers.forEach(marker=>map?.removeLayer(marker));navigationHazardMarkers=[];
+  hazards.forEach(hazard=>{
+    const icon=L.divIcon({className:'road-hazard-icon',html:'<span>🚧</span>',iconSize:[36,36],iconAnchor:[18,18]});
+    const marker=L.marker([hazard.lat,hazard.lon],{icon,zIndexOffset:900}).addTo(map);
+    marker.bindPopup('<b>🚧 '+escapeHtml(hazard.name)+'</b><br>Incidencia registrada en OpenStreetMap. Comprueba siempre la señalización real.');
+    navigationHazardMarkers.push(marker);
+  });
 }
 function drawSafetyCameras(cameras){
   navigationCameraMarkers.forEach(marker=>map?.removeLayer(marker));navigationCameraMarkers=[];
@@ -885,7 +1000,12 @@ async function generateRoute(){
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
     const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
     navigationCameras=await findSpeedCameras(result.coords);drawSafetyCameras(navigationCameras);
-     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+    navigationHazards=await findRoadHazards(result.coords);drawRoadHazards(navigationHazards);
+    const routeData=result.data?.routes?.[0];
+    const navigationCueList=buildManeuverCues(routeData);
+    if(!navigationCueList.length)navigationCueList.push(...buildNavigationCues(result.coords).cues);
+    drawManeuverSigns(navigationCueList,result.coords);
+     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,navigationCues:navigationCueList,roadHazards:navigationHazards,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
     $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
@@ -929,6 +1049,7 @@ function render(r){
     '<h2>🏍️ '+escapeHtml(r.name)+'</h2>'+
     (r.direction==='inversa'?'<div class="warning">↩️ Sentido inverso</div>':'')+
     (navigationCameras.length?'<div class="warning">⚠️ '+navigationCameras.length+' puntos de control encontrados en OpenStreetMap. Datos colaborativos: pueden faltar ubicaciones o estar desactualizados; respeta siempre la señalización.</div>':'')+
+    (navigationHazards.length?'<div class="warning">🚧 '+navigationHazards.length+' posibles obras o incidencias señaladas en OpenStreetMap. Confirma siempre la situación real en carretera.</div>':'')+
     '<small>📍 '+(r.region==='peninsula'?'Península':(ISLANDS[r.region]?.name||r.region))+
     ' · Creada por '+escapeHtml(r.createdBy||'un motero')+
     ' · '+(r.circular?'ruta circular':'ruta lineal')+
