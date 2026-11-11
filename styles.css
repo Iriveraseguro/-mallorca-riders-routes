@@ -41,3 +41,9 @@
 }
 
 .safety-camera-marker{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#f59e0b;border:2px solid #fff;box-shadow:0 2px 8px #0009;font-size:18px}.route-direction-arrow{color:#1683ff}
+
+
+/* Indicaciones de maniobra y alertas de obras en el mapa. */
+.navigation-sign-icon,.road-hazard-icon{background:transparent!important;border:0!important}
+.navigation-sign-icon span{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:#fff;color:#111;border:2px solid #1683ff;box-shadow:0 2px 8px #0008;font-size:20px;font-weight:900}
+.road-hazard-icon span{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:#f59e0b;border:2px solid #fff;box-shadow:0 2px 8px #0009;font-size:21px}
