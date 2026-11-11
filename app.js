@@ -949,6 +949,21 @@ async function reverseCurrentRoute(){
   finally{if(button){button.disabled=false;button.textContent='↔️ Invertir sentido'}}
 }
 
+async function geocodeDestination(query){
+  const url='https://nominatim.openstreetmap.org/search?'+new URLSearchParams({
+    format:'jsonv2',q:query+', España',countrycodes:'es',limit:'5',addressdetails:'1'
+  }).toString();
+  let response;
+  try{response=await fetch(url,{headers:{'Accept':'application/json'}})}
+  catch(error){throw new Error('No se ha podido conectar con el buscador de lugares. Comprueba la conexión.')}
+  if(!response.ok)throw new Error('El buscador de destinos no responde (HTTP '+response.status+').');
+  const results=await response.json();
+  if(!Array.isArray(results)||!results.length)throw new Error('No he encontrado ese destino en España. Prueba con el nombre del pueblo o añade la isla/provincia.');
+  const place=results[0],lat=Number(place.lat),lon=Number(place.lon);
+  if(!Number.isFinite(lat)||!Number.isFinite(lon))throw new Error('El destino encontrado no tiene coordenadas válidas.');
+  return {name:String(place.name||query),displayName:String(place.display_name||query),lat,lon};
+}
+
 async function generateRoute(){
   if(screenshotReferenceActive&&!manualRouteActive){
     $('mapStatus').textContent='⚠️ La captura no contiene coordenadas GPS. Para no dibujar una ruta en otra zona, importa un enlace/archivo de ruta o pulsa «Marcar puntos manualmente» y coloca al menos 2 puntos sobre el mapa.';
@@ -956,7 +971,40 @@ async function generateRoute(){
     $('map').scrollIntoView({behavior:'smooth',block:'center'});
     return;
   }
-  const plan=routePlan();if(!plan)return;
+  let plan;
+  const destinationText=String($('destinationText')?.value||'').trim();
+  if(destinationText){
+    if(!pos){
+      $('mapStatus').textContent='📍 Antes de buscar un destino, pulsa «Usar mi ubicación» para calcular la salida desde donde estás.';
+      $('locStatus').textContent='Necesitamos tu ubicación para preparar una ruta hasta el destino.';
+      $('loc').scrollIntoView({behavior:'smooth',block:'center'});
+      return;
+    }
+    $('mapStatus').textContent='🔎 Buscando el destino «'+destinationText+'»…';
+    try{
+      const destination=await geocodeDestination(destinationText);
+      const region=detectIsland(pos)||'peninsula';
+      if(ISLANDS[region]&&!pointInBox(destination.lat,destination.lon,ISLANDS[region].box)){
+        throw new Error('El destino encontrado no está en '+ISLANDS[region].name+'. Escribe un lugar de la misma isla.');
+      }
+      const start={lat:pos.latitude,lon:pos.longitude};
+      plan={
+        start,targets:[{name:destination.name,lat:destination.lat,lon:destination.lon}],
+        requestedKm:Math.max(1,distanceKm(start,destination)*1.25),
+        requestedMinutes:(parseFloat($('duration').value||'3')||3)*60,
+        curves:Number($('curves').value)||3,type,label:'tu ubicación',
+        region,manual:true,destination:true,destinationName:destination.name,
+        destinationDisplayName:destination.displayName
+      };
+    }catch(error){
+      const message=String(error?.message||error);
+      $('mapStatus').textContent='⚠️ '+message;
+      alert(message);
+      return;
+    }
+  }else{
+    plan=routePlan();if(!plan)return null;
+  }
   const btn=$('generate');btn.disabled=true;btn.textContent='CALCULANDO RUTA… 🏍️';
   $('mapStatus').textContent='🧭 Comparando alternativas para acercarnos a los km y duración elegidos…';clearRoute();
   try{
@@ -965,7 +1013,7 @@ async function generateRoute(){
       const filter=ISLANDS[candidate.region]?{exclude_ferry:true}:{};
       const locations=[{lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter}];
       candidate.targets.forEach(p=>locations.push({lat:p.lat,lon:p.lon,type:'break',search_filter:filter}));
-      if($('circle').checked)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
+      if($('circle').checked&&!plan.destination)locations.push({lat:candidate.start.lat,lon:candidate.start.lon,type:'break',search_filter:filter});
       const result=await requestRoute(locations,candidate);
       return {result,candidate,score:routeScore(result,candidate)};
     }));
@@ -998,17 +1046,17 @@ async function generateRoute(){
     map.fitBounds(viewBounds,{padding:[30,30]});
     const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60);
     const duration=mins>=60?`${Math.floor(mins/60)} h ${mins%60} min`:`${mins} min`;
-    const requestedNote=error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
+    const requestedNote=plan.destination?'Destino seleccionado: '+plan.destinationName+'.':error<=0.10?'Distancia muy próxima a la elegida.':error<=0.20?'Distancia aproximada a la elegida.':'La red de carreteras no permite acercarse más con estas alternativas.';
     navigationCameras=await findSpeedCameras(result.coords);drawSafetyCameras(navigationCameras);
     navigationHazards=await findRoadHazards(result.coords);drawRoadHazards(navigationHazards);
     const routeData=result.data?.routes?.[0];
     const navigationCueList=buildManeuverCues(routeData);
     if(!navigationCueList.length)navigationCueList.push(...buildNavigationCues(result.coords).cues);
     drawManeuverSigns(navigationCueList,result.coords);
-     current={id:Date.now(),name:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,navigationCues:navigationCueList,roadHazards:navigationHazards,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote};
+     current={id:Date.now(),name:plan.destination?'Ruta hasta '+plan.destinationName:type==='Curvas'?'Ruta de curvas':type==='Costa'?'Costa y curvas':type==='Montaña'?'Montaña y curvas':'Ruta mixta',km:`${km} km`,duration,curves:$('curves').value,stop:$('stop').value,realStop,realStops,poiError,circular:plan.destination?false:$('circle').checked,createdBy:'Motor de rutas',type,shape:result.coords,navigationCues:navigationCueList,roadHazards:navigationHazards,routePoints:plan.manual?manualWaypoints.map((p,i)=>({name:p.name||'Punto '+(i+1),lat:p.lat,lon:p.lon})):chosen.targets.map(p=>({name:p.name||'Punto de paso',lat:p.lat,lon:p.lon})),region:plan.region,start:plan.label,requestedKm:plan.requestedKm,requestedDuration:plan.requestedMinutes,requestedNote,destination:plan.destination?plan.destinationName:undefined};
     render(current);
     const poiStatus=$('stop').value==='none'?'':(poiError?' ⚠️ No se pudieron cargar las paradas ('+poiError+').' :' 📍 '+realStops.length+' establecimientos encontrados en el mapa.');
-    $('mapStatus').textContent=`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
+    $('mapStatus').textContent=plan.destination?`🏍️ Ruta hasta ${plan.destinationName}: ${km} km · ${duration}. Ruta de ida lista para iniciar la navegación por voz.${poiStatus}`:`🏍️ Ruta terrestre: ${km} km · ${duration} · objetivo ${plan.requestedKm} km / ${plan.requestedMinutes/60} h. ${requestedNote}${poiStatus}`;
   }catch(e){
     console.error('Error al generar ruta:',e);
     const reason=String(e?.message||e||'ERROR_DESCONOCIDO');
