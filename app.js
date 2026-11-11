@@ -1067,6 +1067,7 @@ function render(r){
     '</div>'+
     '<div class="stop">'+(r.stop==='none'?'Sin parada':(r.poiError?'⚠️ No se pudieron consultar los establecimientos. Comprueba la conexión y vuelve a generar la ruta.':(r.realStops?.length?('📍 '+r.realStops.length+' establecimientos marcados en el mapa. Toca un marcador para ver su nombre y ubicación.'): (r.stop+' · No se encontraron establecimientos con nombre a menos de 3 km de la ruta.'))))+'</div>'+
     '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div>'+
+    '<div class="note">🗣️ Las indicaciones usan maniobras de la ruta. Los avisos de obras dependen de datos colaborativos de OpenStreetMap: pueden faltar o no estar actualizados.</div>'+
     '<div class="actions">'+sharedActions+
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
