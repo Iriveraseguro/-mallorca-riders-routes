@@ -1027,6 +1027,12 @@ $('generate').onclick=generateRoute;
 
 
 function render(r){
+  if(Array.isArray(r.shape)&&r.shape.length>1){
+    const cues=Array.isArray(r.navigationCues)&&r.navigationCues.length?r.navigationCues:buildNavigationCues(r.shape).cues;
+    drawManeuverSigns(cues,r.shape);
+    navigationHazards=Array.isArray(r.roadHazards)?r.roadHazards:[];
+    drawRoadHazards(navigationHazards);
+  }
   $('result').classList.remove('hidden');
   const sharedActions=r.sharedRouteId
     ? '<button class="secondary" onclick="editSharedRoute()">✏️ Proponer cambios</button><button class="secondary" onclick="publishSharedRouteUpdate()">💾 Guardar cambios para todos</button><button class="secondary" onclick="showSharedRouteHistory()">🕘 Versiones anteriores</button>'
