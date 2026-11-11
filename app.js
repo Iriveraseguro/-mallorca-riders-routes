@@ -976,8 +976,14 @@ function refreshDestinationMarkers(){
     marker.setPopupContent('<b>Parada '+(index+1)+': '+escapeHtml(point.name)+'</b>');
   });
   const list=$('destinationStopsList');
-  if(list)list.innerHTML=destinationWaypoints.length?destinationWaypoints.map((p,i)=>'<div class="destination-stop-row"><span><b>'+(i+1)+'.</b> '+escapeHtml(p.name)+'</span><button type="button" class="map-button" onclick="removeDestinationStop('+i+')">Quitar</button></div>').join(''):'<small class="note">Todavía no has añadido paradas.</small>';
+  if(list)list.innerHTML=destinationWaypoints.length?destinationWaypoints.map((p,i)=>'<div class="destination-stop-row"><span><b>'+(i+1)+'.</b> '+escapeHtml(p.name)+'</span><span class="destination-stop-actions"><button type="button" class="map-button" '+(i===0?'disabled':'')+' onclick="moveDestinationStop('+i+',-1)" aria-label="Subir parada">↑</button><button type="button" class="map-button" '+(i===destinationWaypoints.length-1?'disabled':'')+' onclick="moveDestinationStop('+i+',1)" aria-label="Bajar parada">↓</button><button type="button" class="map-button" onclick="removeDestinationStop('+i+')">Quitar</button></span></div>').join(''):'<small class="note">Todavía no has añadido paradas.</small>';
 }
+window.moveDestinationStop=function(index,delta){
+  const next=index+delta;if(index<0||next<0||index>=destinationWaypoints.length||next>=destinationWaypoints.length)return;
+  [destinationWaypoints[index],destinationWaypoints[next]]=[destinationWaypoints[next],destinationWaypoints[index]];
+  if(destinationMarkers.length===destinationWaypoints.length)[destinationMarkers[index],destinationMarkers[next]]=[destinationMarkers[next],destinationMarkers[index]];
+  refreshDestinationMarkers();
+};
 window.removeDestinationStop=function(index){
   if(index<0||index>=destinationWaypoints.length)return;
   destinationWaypoints.splice(index,1);
