@@ -1061,6 +1061,7 @@ async function generateRoute(){
     const error=Math.abs(result.summary.lengthKm-plan.requestedKm)/Math.max(plan.requestedKm,1);
     routeLine=L.polyline(result.coords,{weight:6,opacity:.9,color:'#1683ff'}).addTo(map);addDirectionalArrows(result.coords);
     if(plan.destination){
+      destinationMarkers.forEach(marker=>map.removeLayer(marker));destinationMarkers=[];
       plan.targets.forEach((p,i)=>{
         const marker=L.marker([p.lat,p.lon],{icon:L.divIcon({className:'destination-stop-icon',html:'<span>'+(i+1)+'</span>',iconSize:[32,32],iconAnchor:[16,16]})}).addTo(map).bindPopup('🏍️ Parada '+(i+1)+': '+escapeHtml(p.name));
         routeMarkers.push(marker);
