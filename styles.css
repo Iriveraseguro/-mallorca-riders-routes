@@ -52,3 +52,8 @@
 .destination-stops-list{display:grid;gap:6px;margin:8px 0 12px}
 .destination-stop-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border,#d5dbe5);border-radius:10px;background:var(--surface,#fff)}
 .destination-stop-icon span{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#1769d2;color:#fff;border:2px solid #fff;font-weight:800;box-shadow:0 1px 6px #0005}
+
+.gps-recorder-card{border:1px solid var(--border,#d5dbe5)}
+.gps-recorder-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.gps-record-stats{font-weight:700;font-variant-numeric:tabular-nums}
+.gps-record-warning{font-size:.85rem;color:#9a5b12;background:#fff7e6;border-radius:10px;padding:10px}
