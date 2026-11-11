@@ -57,3 +57,5 @@
 .gps-recorder-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .gps-record-stats{font-weight:700;font-variant-numeric:tabular-nums}
 .gps-record-warning{font-size:.85rem;color:#9a5b12;background:#fff7e6;border-radius:10px;padding:10px}
+
+.destination-stop-actions{display:flex;gap:4px;align-items:center}.destination-stop-actions button{padding:6px 9px;min-width:34px}
