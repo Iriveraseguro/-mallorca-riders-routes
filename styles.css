@@ -59,3 +59,9 @@
 .gps-record-warning{font-size:.85rem;color:#9a5b12;background:#fff7e6;border-radius:10px;padding:10px}
 
 .destination-stop-actions{display:flex;gap:4px;align-items:center}.destination-stop-actions button{padding:6px 9px;min-width:34px}
+
+/* Improve contrast in the white written-destination stop list */
+.destination-stop-row{color:#172033;background:#fff;border-color:#cbd5e1}
+.destination-stop-row>span:first-child{color:#172033;font-weight:600}
+.destination-stops-list .note{color:#475569;font-weight:500}
+.destination-stop-actions button:disabled{opacity:.45}
