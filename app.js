@@ -1,5 +1,5 @@
 let type='Mixta',pos=null,current=null,map=null,userMarker=null,userAccuracy=null,routeLine=null,routeMarkers=[],manualWaypoints=[],manualMarkers=[],manualMode=false,manualRouteActive=false;
-let destinationWaypoints=[],destinationMarkers=[],recordingWatchId=null,recordingPoints=[],recordingLine=null,recordingStartedAt=0;
+let destinationWaypoints=[],destinationMarkers=[];
 const $=x=>document.getElementById(x);
 
 function initMap(){
@@ -358,6 +358,11 @@ function initApp(){
   $('finishManual').onclick=finishManualRoute;
   $('clearManual').onclick=clearManualRoute;$('shareRoute').onclick=share;
   $('refreshApp').onclick=refreshApplication;
+  $('gpsStartRecording').onclick=gpsStartRecording;
+  $('gpsStopRecording').onclick=gpsStopRecording;
+  $('gpsSaveRecording').onclick=gpsSaveRecording;
+  $('gpsDiscardRecording').onclick=()=>{if(confirm('¿Descartar el recorrido GPS grabado?'))gpsDiscardRecording()};
+  gpsRestoreDraft();
   $('region').onchange=()=>{clearManualRoute();updateRegionUI()};
   $('peninsulaStart').onchange=updateRegionUI;
   updateRegionUI();
@@ -1110,56 +1115,82 @@ async function generateRoute(){
   }finally{btn.disabled=false;btn.textContent='GENERAR RUTA 🏍️'}
 }
 
-function startTrackRecording(){
-  if(recordingWatchId!==null){$('mapStatus').textContent='La grabación ya está en marcha.';return}
-  if(!navigator.geolocation){$('mapStatus').textContent='Este navegador no permite grabar la ubicación.';return}
-  if(!initMap())return;
-  recordingPoints=[];recordingStartedAt=Date.now();
-  if(recordingLine&&map)map.removeLayer(recordingLine);
-  recordingLine=L.polyline([],{color:'#e11d48',weight:5,opacity:.9}).addTo(map);
-  $('startTrackRecording').disabled=true;$('stopTrackRecording').disabled=false;
-  $('mapStatus').textContent='🔴 Grabando recorrido GPS. Mantén la app abierta y permite el acceso a la ubicación.';
-  recordingWatchId=navigator.geolocation.watchPosition(position=>{
-    const point=[position.coords.latitude,position.coords.longitude],previous=recordingPoints[recordingPoints.length-1];
-    if(!previous||distanceKm({lat:previous[0],lon:previous[1]},{lat:point[0],lon:point[1]})>0.015){
-      recordingPoints.push(point);recordingLine.addLatLng(point);
-      if(recordingPoints.length===1)map.setView(point,15);
-      $('mapStatus').textContent='🔴 Grabando · '+recordingPoints.length+' posiciones registradas';
-    }
-  },error=>{$('mapStatus').textContent='⚠️ Se ha perdido la señal GPS: '+locationErrorMessage(error)},{enableHighAccuracy:true,maximumAge:3000,timeout:15000});
+const GPS_DRAFT_KEY='mrr-gps-recording-draft-v1';
+let gpsRecording=false,gpsWatchId=null,gpsTrack=[],gpsStartedAt=null,gpsDistanceMeters=0,gpsTrackLine=null,gpsTrackMarker=null;
+function gpsFormatDuration(ms){const n=Math.max(0,Math.floor(ms/60000)),h=Math.floor(n/60),m=n%60;return h?h+' h '+m+' min':m+' min'}
+function gpsUpdateStatus(message){
+ const el=$('gpsRecordStatus');if(el)el.textContent=message;
+ const start=$('gpsStartRecording'),stop=$('gpsStopRecording'),saveButton=$('gpsSaveRecording'),discard=$('gpsDiscardRecording');
+ if(start)start.disabled=gpsRecording;if(stop)stop.disabled=!gpsRecording;
+ if(saveButton)saveButton.disabled=gpsRecording||gpsTrack.length<2;
+ if(discard)discard.disabled=gpsRecording||gpsTrack.length===0;
+ const stats=$('gpsRecordStats');if(stats){const elapsed=gpsStartedAt?Date.now()-gpsStartedAt:(gpsTrack.length?Date.now()-(gpsTrack[0][2]||Date.now()):0);stats.textContent=(gpsDistanceMeters/1000).toFixed(1).replace('.',',')+' km · '+gpsFormatDuration(elapsed)+' · '+gpsTrack.length+' posiciones'}
 }
-function stopTrackRecording(){
-  if(recordingWatchId!==null){navigator.geolocation.clearWatch(recordingWatchId);recordingWatchId=null}
-  $('startTrackRecording').disabled=false;$('stopTrackRecording').disabled=true;
-  if(recordingPoints.length<2){$('mapStatus').textContent='⚠️ No hay suficientes puntos GPS para guardar el recorrido.';return}
-  const shape=recordingPoints.map(p=>p.slice()),km=shape.reduce((sum,p,i)=>i?sum+distanceKm({lat:shape[i-1][0],lon:shape[i-1][1]},{lat:p[0],lon:p[1]}):0,0);
-  const minutes=Math.max(1,Math.round((Date.now()-recordingStartedAt)/60000));
-  current={id:Date.now(),name:'Recorrido grabado',km:km.toFixed(1)+' km',duration:minutes+' min',curves:3,stop:'none',realStop:null,realStops:[],circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<0.5,createdBy:'Grabación GPS',type:'Mixta',shape,recordedShape:shape.map(p=>p.slice()),isRecordedTrack:true,convertedFromRecording:false,routePoints:[],region:detectIsland({latitude:shape[0][0],longitude:shape[0][1]})||'peninsula',start:'Grabación GPS',requestedNote:'Recorrido original grabado con GPS.'};
-  routeLine=L.polyline(shape,{color:'#e11d48',weight:5,opacity:.9}).addTo(map);map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
-  render(current);$('mapStatus').textContent='✅ Recorrido grabado con '+shape.length+' posiciones. Guárdalo y podrás convertirlo en ruta navegable cuando quieras.';
+function gpsPersistDraft(){try{localStorage.setItem(GPS_DRAFT_KEY,JSON.stringify({points:gpsTrack.slice(-12000),startedAt:gpsStartedAt,distanceMeters:gpsDistanceMeters}))}catch(e){console.warn('No se pudo guardar el borrador GPS',e);gpsUpdateStatus('⚠️ No hay espacio suficiente en este dispositivo para guardar el recorrido.')}}
+function gpsRestoreDraft(){
+ try{const d=JSON.parse(localStorage.getItem(GPS_DRAFT_KEY)||'null');if(!d||!Array.isArray(d.points)||!d.points.length)return;
+ gpsTrack=d.points.filter(p=>Array.isArray(p)&&p.length>=3&&Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1])));
+ gpsStartedAt=Number(d.startedAt)||gpsTrack[0]?.[2]||Date.now();gpsDistanceMeters=Number(d.distanceMeters)||0;
+ if(gpsTrack.length){gpsDrawTrack();gpsUpdateStatus('⏸️ Se ha recuperado una grabación anterior. Puedes guardarla o descartarla.')}
+ }catch(e){console.warn('No se pudo recuperar el borrador GPS',e)}
+}
+function gpsDrawTrack(){
+ if(!map||!gpsTrack.length)return;const coords=gpsTrack.map(p=>[p[0],p[1]]),last=coords[coords.length-1];
+ if(coords.length>1){if(!gpsTrackLine)gpsTrackLine=L.polyline(coords,{color:'#16a34a',weight:6,opacity:.95}).addTo(map);else gpsTrackLine.setLatLngs(coords)}
+ if(!gpsTrackMarker)gpsTrackMarker=L.circleMarker(last,{radius:7,color:'#fff',weight:2,fillColor:'#16a34a',fillOpacity:1}).addTo(map);else gpsTrackMarker.setLatLng(last);
+ if(coords.length===1)map.setView(last,15);else if(gpsRecording)map.panTo(last,{animate:true,duration:.25});else map.fitBounds(L.latLngBounds(coords),{padding:[28,28]});
+}
+function gpsAcceptPosition(p){
+ if(!gpsRecording)return;const c=p.coords;if(!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude))return;
+ if(Number.isFinite(c.accuracy)&&c.accuracy>60){gpsUpdateStatus('📡 Precisión GPS baja ('+Math.round(c.accuracy)+' m). Esperando…');return}
+ const point=[c.latitude,c.longitude,Number(p.timestamp)||Date.now(),Number(c.accuracy)||0],prev=gpsTrack[gpsTrack.length-1];
+ if(prev){const moved=distanceKm({lat:prev[0],lon:prev[1]},{lat:point[0],lon:point[1]})*1000,elapsed=point[2]-(prev[2]||point[2]);
+ if(moved<7&&elapsed<15000)return;if(moved>1000&&elapsed<5000){gpsUpdateStatus('⚠️ Salto GPS descartado; esperando señal estable…');return}gpsDistanceMeters+=moved}
+ gpsTrack.push(point);if(gpsTrack.length>12000)gpsTrack=gpsTrack.filter((_,i)=>i===0||i%2===0);
+ gpsDrawTrack();gpsPersistDraft();gpsUpdateStatus('🔴 Grabando recorrido GPS. Para esta primera prueba, mantén la app abierta y la pantalla activa.');
+}
+function gpsStartRecording(){
+ if(gpsRecording)return;if(!navigator.geolocation){gpsUpdateStatus('❌ Este navegador no permite acceder al GPS.');return}
+ if(gpsTrack.length){if(!confirm('Hay una grabación anterior sin guardar. ¿Quieres descartarla y empezar otra?'))return;gpsDiscardRecording()}
+ gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=Date.now();gpsRecording=true;gpsPersistDraft();gpsUpdateStatus('⏳ Esperando señal GPS…');
+ try{gpsWatchId=navigator.geolocation.watchPosition(gpsAcceptPosition,e=>{gpsUpdateStatus('❌ '+locationErrorMessage(e)+' La grabación se ha detenido.');gpsStopRecording()},{enableHighAccuracy:true,maximumAge:3000,timeout:20000})}
+ catch(e){gpsRecording=false;gpsWatchId=null;gpsUpdateStatus('❌ No se pudo iniciar el GPS: '+(e.message||'error'))}
+}
+function gpsStopRecording(){if(gpsWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null;gpsRecording=false;gpsPersistDraft();gpsUpdateStatus(gpsTrack.length>1?'⏸️ Grabación detenida. Ya puedes guardar el recorrido.':'⚠️ Aún no hay suficientes posiciones GPS para guardar una ruta.')}
+function gpsDiscardRecording(){
+ if(gpsRecording)gpsStopRecording();gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;
+ if(gpsTrackLine&&map)map.removeLayer(gpsTrackLine);if(gpsTrackMarker&&map)map.removeLayer(gpsTrackMarker);gpsTrackLine=null;gpsTrackMarker=null;
+ try{localStorage.removeItem(GPS_DRAFT_KEY)}catch(_){}gpsUpdateStatus('Grabación descartada. Puedes empezar otra cuando quieras.')
+}
+async function gpsSaveRecording(){
+ if(gpsRecording){alert('Detén la grabación antes de guardarla.');return}if(gpsTrack.length<2){alert('Necesitas al menos dos posiciones GPS.');return}
+ const name=String($('gpsRouteName')?.value||'').trim()||('Ruta GPS '+new Date(gpsStartedAt||Date.now()).toLocaleDateString('es-ES'));
+ const shape=gpsTrack.map(p=>[Number(p[0]),Number(p[1])]),km=gpsDistanceMeters/1000;
+ const durationMs=Math.max(0,(gpsTrack[gpsTrack.length-1][2]||Date.now())-(gpsStartedAt||gpsTrack[0][2]||Date.now()));
+ const region=detectIsland({latitude:shape[0][0],longitude:shape[0][1]})||$('region').value||'mallorca';
+ current={id:Date.now(),name,km:km.toFixed(1).replace('.',',')+' km',duration:gpsFormatDuration(durationMs),curves:3,stop:'none',realStop:null,realStops:[],poiError:null,circular:distanceKm({lat:shape[0][0],lon:shape[0][1]},{lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]})<2,createdBy:'Grabación GPS',type:'Mixta',shape,recordedShape:shape.map(p=>p.slice()),routePoints:[],region,start:'Grabación GPS',requestedKm:km,requestedDuration:durationMs/60000,requestedNote:'Recorrido registrado directamente por GPS; '+gpsTrack.length+' posiciones.',recordedGps:true};
+ clearRoute();routeLine=L.polyline(shape,{weight:6,opacity:.95,color:'#16a34a'}).addTo(map);addDirectionalArrows(shape);map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+ gpsTrack=[];gpsDistanceMeters=0;gpsStartedAt=null;try{localStorage.removeItem(GPS_DRAFT_KEY)}catch(_){}
+ gpsUpdateStatus('✅ Recorrido preparado. Guardándolo en «Mis rutas»…');render(current);await save();gpsUpdateStatus('✅ Ruta GPS guardada en «Mis rutas» en este dispositivo.');$('result')?.scrollIntoView({behavior:'smooth',block:'start'});
 }
 async function convertRecordedTrack(){
-  if(!current?.isRecordedTrack||!Array.isArray(current.recordedShape||current.shape)){alert('Abre primero un recorrido grabado.');return}
-  const button=document.querySelector('[onclick="convertRecordedTrack()"]');if(button){button.disabled=true;button.textContent='⏳ Ajustando a carreteras…'}
-  try{
-    const shape=current.recordedShape||current.shape;if(shape.length<2)throw new Error('La grabación necesita al menos dos posiciones GPS.');
-    const cumulative=routeCumulative(shape),total=cumulative[cumulative.length-1]||0,step=Math.max(2,total/16),samples=[{lat:shape[0][0],lon:shape[0][1]}];
-    for(let d=step;d<total-0.5;d+=step){
-      let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;
-      const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;
-      samples.push({lat:shape[i-1][0]+(shape[i][0]-shape[i-1][0])*f,lon:shape[i-1][1]+(shape[i][1]-shape[i-1][1])*f});
-    }
-    samples.push({lat:shape[shape.length-1][0],lon:shape[shape.length-1][1]});
-    const region=detectIsland({latitude:shape[0][0],longitude:shape[0][1]})||'peninsula';
-    const result=await requestRoute(samples.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[region]?{exclude_ferry:true}:{}})),{region,type:current.type||'Mixta'});
-    const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60),cues=buildManeuverCues(result.data?.routes?.[0]);
-    current={...current,shape:result.coords,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:samples.slice(1,-1).map((p,i)=>({name:'Punto de trazado '+(i+1),lat:p.lat,lon:p.lon})),navigationCues:cues.length?cues:buildNavigationCues(result.coords).cues,convertedFromRecording:true,requestedNote:'Ruta ajustada a carreteras a partir de una grabación GPS. La grabación original se conserva.'};
-    drawSharedRoute(current);render(current);$('mapStatus').textContent='✅ Grabación convertida en ruta por carreteras. Se conserva el recorrido GPS original para futuras conversiones.';
-  }catch(error){console.error('No se pudo convertir la grabación',error);alert('No se pudo convertir la grabación: '+(error.message||'error de conexión'))}
-  finally{if(button){button.disabled=false;button.textContent='🛣️ Convertir grabación en ruta'}}
+ if(!current?.recordedGps&&!current?.isRecordedTrack){alert('Abre primero un recorrido grabado.');return}
+ const original=current.recordedShape||current.shape;if(!Array.isArray(original)||original.length<2){alert('La grabación no contiene suficientes puntos GPS.');return}
+ const button=document.querySelector('[onclick="convertRecordedTrack()"]');if(button){button.disabled=true;button.textContent='⏳ Ajustando a carreteras…'}
+ try{
+  const cumulative=routeCumulative(original),total=cumulative[cumulative.length-1]||0,step=Math.max(2,total/16),samples=[{lat:original[0][0],lon:original[0][1]}];
+  for(let d=step;d<total-0.5;d+=step){let i=1;while(i<cumulative.length-1&&cumulative[i]<d)i++;const span=cumulative[i]-cumulative[i-1],f=span?(d-cumulative[i-1])/span:0;samples.push({lat:original[i-1][0]+(original[i][0]-original[i-1][0])*f,lon:original[i-1][1]+(original[i][1]-original[i-1][1])*f})}
+  samples.push({lat:original[original.length-1][0],lon:original[original.length-1][1]});
+  const region=detectIsland({latitude:original[0][0],longitude:original[0][1]})||'peninsula';
+  const result=await requestRoute(samples.map(p=>({lat:p.lat,lon:p.lon,type:'break',search_filter:ISLANDS[region]?{exclude_ferry:true}:{}})),{region,type:current.type||'Mixta'});
+  const km=Math.round(result.summary.lengthKm),mins=Math.round(result.summary.timeSec/60),cues=buildManeuverCues(result.data?.routes?.[0]);
+  current={...current,shape:result.coords,recordedShape:original.map(p=>p.slice()),recordedGps:true,convertedFromRecording:true,km:km+' km',duration:mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min',routePoints:samples.slice(1,-1).map((p,i)=>({name:'Punto de trazado '+(i+1),lat:p.lat,lon:p.lon})),navigationCues:cues.length?cues:buildNavigationCues(result.coords).cues,requestedNote:'Ruta ajustada a carreteras a partir de una grabación GPS. El trazado original se conserva para futuras conversiones.'};
+  if(gpsTrackLine&&map)map.removeLayer(gpsTrackLine);if(gpsTrackMarker&&map)map.removeLayer(gpsTrackMarker);gpsTrackLine=null;gpsTrackMarker=null;
+  drawSharedRoute(current);render(current);$('mapStatus').textContent='✅ Grabación convertida en ruta por carreteras. La grabación original se conserva.';
+ }catch(error){console.error('No se pudo convertir la grabación',error);alert('No se pudo convertir la grabación: '+(error.message||'error de conexión'))}
+ finally{if(button){button.disabled=false;button.textContent='🛣️ Convertir grabación en ruta'}}
 }
-$('startTrackRecording')?.addEventListener('click',startTrackRecording);
-$('stopTrackRecording')?.addEventListener('click',stopTrackRecording);
+document.addEventListener('visibilitychange',()=>{if(gpsRecording&&document.hidden){gpsPersistDraft();gpsUpdateStatus('⚠️ La app ha pasado a segundo plano. El sistema puede suspender el GPS; para esta primera prueba mantén la pantalla activa.')}});
 
 $('generate').onclick=generateRoute;
 
@@ -1207,7 +1238,7 @@ function render(r){
     '<div class="warning">🗺️ Ruta calculada sobre carreteras reales y validada para no salir de la zona seleccionada.</div>'+
     '<div class="note">🗣️ Las indicaciones usan maniobras de la ruta. Los avisos de obras dependen de datos colaborativos de OpenStreetMap: pueden faltar o no estar actualizados.</div>'+
     '<div class="actions">'+sharedActions+
-      (r.isRecordedTrack?'<button class="secondary" onclick="convertRecordedTrack()">🛣️ Convertir grabación en ruta</button>':'')+
+      ((r.recordedGps||r.isRecordedTrack)?'<button class="secondary" onclick="convertRecordedTrack()">🛣️ Convertir grabación en ruta</button>':'')+
       '<button class="secondary" onclick="save()">💾 Guardar</button>'+
       '<button class="secondary" onclick="share()">📤 Compartir</button>'+
       '<button class="secondary" onclick="maps()">🗺️ Abrir mapas</button>'+
