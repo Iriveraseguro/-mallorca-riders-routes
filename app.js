@@ -728,9 +728,22 @@ async function requestRoute(locations,plan){
 
 // Navegación por voz y avisos de seguridad en ruta (mejor esfuerzo en segundo plano en iOS).
 let navigationWatchId=null,navigationCues=[],navigationAnnouncedFar=new Set(),navigationAnnouncedNear=new Set(),navigationLastCameraAlerts=new Set(),navigationCameras=[],navigationCameraMarkers=[],navigationHazards=[],navigationHazardMarkers=[],navigationLastHazardAlerts=new Set(),navigationManeuverMarkers=[];
+let navigationSpeechQueue=[],navigationSpeechBusy=false;
 function speakNavigation(message){
   if(!('speechSynthesis' in window)||!message)return;
-  try{window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(message);utterance.lang='es-ES';utterance.rate=1;utterance.volume=1;window.speechSynthesis.speak(utterance)}catch(error){console.warn('No se pudo reproducir la indicación de voz',error)}
+  navigationSpeechQueue.push(String(message));
+  pumpNavigationSpeech();
+}
+function pumpNavigationSpeech(){
+  if(navigationSpeechBusy||!navigationSpeechQueue.length||!('speechSynthesis' in window))return;
+  navigationSpeechBusy=true;
+  try{
+    const utterance=new SpeechSynthesisUtterance(navigationSpeechQueue.shift());
+    utterance.lang='es-ES';utterance.rate=1;utterance.volume=1;
+    const finish=()=>{navigationSpeechBusy=false;pumpNavigationSpeech()};
+    utterance.onend=finish;utterance.onerror=finish;
+    window.speechSynthesis.speak(utterance);
+  }catch(error){navigationSpeechBusy=false;console.warn('No se pudo reproducir la indicación de voz',error)}
 }
 function routeCumulative(shape){
   const cumulative=[0];
@@ -844,7 +857,7 @@ function nearestRouteProgress(point,shape,cumulative){
 function stopVoiceNavigation(){
   if(navigationWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(navigationWatchId);
   navigationWatchId=null;
-  if('speechSynthesis' in window)window.speechSynthesis.cancel();
+  navigationSpeechQueue=[];navigationSpeechBusy=false;if('speechSynthesis' in window)window.speechSynthesis.cancel();
   $('voiceNavigate')?.classList.remove('active');
   if($('mapStatus'))$('mapStatus').textContent='🔇 Navegación por voz detenida.';
 }
